@@ -3,41 +3,125 @@ import * as THREE from 'three'
 import * as CANNON from 'cannon-es'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js'
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
+import GUI from 'lil-gui'
 
 // --- Configuration ---
 const TIME_STEP = 1 / 60
 
+const debugConfig = {
+  opacity: 0.7,
+  roughness: 0.1,
+  metalness: 0.1,
+  emissiveIntensity: 0.5,
+  transmission: 1.0,
+  thickness: 1.0,
+  depthWrite: true,
+  envMapIntensity: 1.0
+}
+
+const gui = new GUI()
+gui.add(debugConfig, 'opacity', 0, 1).onChange(updateSelectedMaterial)
+gui.add(debugConfig, 'roughness', 0, 1).onChange(updateSelectedMaterial)
+gui.add(debugConfig, 'metalness', 0, 1).onChange(updateSelectedMaterial)
+gui.add(debugConfig, 'emissiveIntensity', 0, 5).onChange(updateSelectedMaterial)
+gui.add(debugConfig, 'transmission', 0, 1).onChange(updateSelectedMaterial)
+gui.add(debugConfig, 'thickness', 0, 5).onChange(updateSelectedMaterial)
+gui.add(debugConfig, 'depthWrite').onChange(updateSelectedMaterial)
+gui.add(debugConfig, 'depthWrite').onChange(updateSelectedMaterial)
+gui.add(debugConfig, 'envMapIntensity', 0, 3).onChange((v) => { scene.environmentIntensity = v })
+
+// Helper to rebuild geometry if radius changes (Complex, placeholder for now)
+// gui.add(debugConfig, 'radius', 0, 0.5).name('Block Radius (New only)')
+
+function updateSelectedMaterial() {
+  if (selectedObject && selectedObject.mesh) {
+    selectedObject.mesh.traverse(child => {
+      if (child.isMesh && child.material.isMeshPhysicalMaterial) {
+        child.material.opacity = debugConfig.opacity
+        child.material.roughness = debugConfig.roughness
+        child.material.metalness = debugConfig.metalness
+        child.material.emissiveIntensity = debugConfig.emissiveIntensity
+        child.material.transmission = debugConfig.transmission
+        child.material.thickness = debugConfig.thickness
+        child.material.depthWrite = debugConfig.depthWrite
+        child.material.needsUpdate = true
+      }
+    })
+  }
+}
+
 // --- Scene Setup ---
 const scene = new THREE.Scene()
-scene.background = new THREE.Color(0x202025)
-scene.fog = new THREE.Fog(0x202025, 10, 50)
+scene.background = new THREE.Color(0x15151a) // Slightly darker, richer background
+scene.fog = new THREE.Fog(0x15151a, 20, 50)
 
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100)
-camera.position.set(0, 12, 12)
+camera.position.set(8, 12, 12)
 camera.lookAt(0, 0, 0)
 
 const renderer = new THREE.WebGLRenderer({ antialias: true })
 renderer.setSize(window.innerWidth, window.innerHeight)
+renderer.setPixelRatio(window.devicePixelRatio)
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
+renderer.toneMapping = THREE.ACESFilmicToneMapping
+renderer.toneMappingExposure = 0.6
 document.body.appendChild(renderer.domElement)
 
-// --- Lights ---
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
+// --- Professional Lighting & Environment ---
+
+// 1. Environment Map (Vital for Glass!)
+const pmremGenerator = new THREE.PMREMGenerator(renderer)
+scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture
+scene.environmentIntensity = 1.0
+
+// 2. Ambient (Subtle Fill)
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.2)
 scene.add(ambientLight)
 
-const directionalLight = new THREE.DirectionalLight(0xffffff, 1)
-directionalLight.position.set(5, 20, 10)
-directionalLight.castShadow = true
-directionalLight.shadow.mapSize.width = 2048
-directionalLight.shadow.mapSize.height = 2048
-directionalLight.shadow.camera.near = 0.5
-directionalLight.shadow.camera.far = 50
-directionalLight.shadow.camera.left = -15
-directionalLight.shadow.camera.right = 15
-directionalLight.shadow.camera.top = 15
-directionalLight.shadow.camera.bottom = -15
-scene.add(directionalLight)
+// 3. Key Light (Main Warm Directional)
+const keyLight = new THREE.DirectionalLight(0xfff0dd, 1.0)
+keyLight.position.set(5, 10, 5)
+keyLight.castShadow = true
+keyLight.shadow.mapSize.width = 2048
+keyLight.shadow.mapSize.height = 2048
+keyLight.shadow.radius = 2 // Soft shadows
+keyLight.shadow.camera.near = 0.5
+keyLight.shadow.camera.far = 50
+keyLight.shadow.camera.left = -10
+keyLight.shadow.camera.right = 10
+keyLight.shadow.camera.top = 10
+keyLight.shadow.camera.bottom = -10
+scene.add(keyLight)
+
+// 4. Fill Light (Cooler, softer, opposite side)
+const fillLight = new THREE.DirectionalLight(0xddeeff, 0.5)
+fillLight.position.set(-5, 8, -5)
+fillLight.castShadow = false
+scene.add(fillLight)
+
+// 5. Rim Light (Backlight to pop edges)
+// 5. Rim Light (Backlight to pop edges)
+const rimLight = new THREE.SpotLight(0xffffff, 1.0)
+rimLight.position.set(0, 5, -10)
+rimLight.lookAt(0, 0, 0)
+scene.add(rimLight)
+
+// --- Light Debug Controls ---
+const lightConfig = {
+  exposure: 0.6,
+  keyIntensity: 1.0,
+  fillIntensity: 0.5,
+  rimIntensity: 1.0,
+  ambientIntensity: 0.2
+}
+const lightFolder = gui.addFolder('Lighting')
+lightFolder.add(lightConfig, 'exposure', 0, 2).onChange((v) => { renderer.toneMappingExposure = v })
+lightFolder.add(lightConfig, 'keyIntensity', 0, 5).onChange((v) => { keyLight.intensity = v })
+lightFolder.add(lightConfig, 'fillIntensity', 0, 5).onChange((v) => { fillLight.intensity = v })
+lightFolder.add(lightConfig, 'rimIntensity', 0, 5).onChange((v) => { rimLight.intensity = v })
+lightFolder.add(lightConfig, 'ambientIntensity', 0, 2).onChange((v) => { ambientLight.intensity = v })
 
 // --- Physics Setup ---
 const world = new CANNON.World()
@@ -45,7 +129,7 @@ world.gravity.set(0, -9.82, 0)
 world.broadphase = new CANNON.SAPBroadphase(world)
 const defaultMaterial = new CANNON.Material('default')
 const defaultContactMaterial = new CANNON.ContactMaterial(defaultMaterial, defaultMaterial, {
-  friction: 0.5,
+  friction: 0.0, // No friction to prevent wall-sticking
   restitution: 0.0,
 })
 world.addContactMaterial(defaultContactMaterial)
@@ -127,6 +211,7 @@ wallShapes.forEach(spec => {
 
 // --- Logic Variables ---
 let selectedObject = null; // { mesh, body, initialMass }
+let interactionMode = 'move' // 'move' or 'rotate'
 let blockCount = 0;
 
 // --- UI Elements ---
@@ -139,6 +224,7 @@ const ui = {
   moveBtns: document.querySelectorAll('.btn-move'),
   rotBtns: document.querySelectorAll('.btn-rot'),
   score: document.getElementById('score-display'),
+  indicator: document.getElementById('mode-indicator'),
 }
 
 // Visual Helpers
@@ -159,7 +245,21 @@ function spawnBlock() {
 function spawnPolyomino(position) {
   const numCubes = Math.floor(Math.random() * 8) + 1
   const cubeSize = 1.0
-  const halfExtents = new CANNON.Vec3(cubeSize * 0.5, cubeSize * 0.5, cubeSize * 0.5)
+  // Slightly shrink collider to prevent edge-friction/jamming (0.49 instead of 0.5)
+  const halfExtents = new CANNON.Vec3(0.49, 0.49, 0.49)
+
+  // Natural Colors (HSL restricted)
+  const hue = Math.random()
+  const saturation = 0.4 + Math.random() * 0.2 // 40-60%
+  const lightness = 0.4 + Math.random() * 0.2 // 40-60%
+  const color = new THREE.Color().setHSL(hue, saturation, lightness)
+
+  const material = new THREE.MeshStandardMaterial({
+    color: color,
+    metalness: 0.1,
+    roughness: 0.5,
+    flatShading: false // Ensure smooth shading
+  })
 
   // Generate Coords
   const coords = [{ x: 0, y: 0, z: 0 }]
@@ -190,35 +290,36 @@ function spawnPolyomino(position) {
   const body = new CANNON.Body({
     mass: mass,
     position: new CANNON.Vec3(position.x, position.y, position.z),
-    material: defaultMaterial
+    material: defaultMaterial,
+    linearDamping: 0.01, // Low damping so gravity works!
+    angularDamping: 0.1,
+    fixedRotation: true
   })
+  body.angularFactor.set(0, 0, 0) // Lock rotation
+  body.linearFactor.set(1, 1, 1)
 
+
+  // Create Individual Cube Geometries (Voxel Look)
   const geometry = new RoundedBoxGeometry(cubeSize, cubeSize, cubeSize, 4, 0.05)
-  const material = new THREE.MeshStandardMaterial({
-    color: Math.random() * 0xffffff,
-    metalness: 0.1,
-    roughness: 0.5
-  })
-
-  // Store Reference Offset (of the first cube) for Snapping
-  // This allows us to alignment ANY block (odd/even) such that its cubes hit grid centers.
-  const refC = coords[0]
-  const refX = (refC.x - centroid.x) * cubeSize
-  const refY = (refC.y - centroid.y) * cubeSize
-  const refZ = (refC.z - centroid.z) * cubeSize
-  const refOffset = new CANNON.Vec3(refX, refY, refZ)
+  //const geometry = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize) // Fallback if rounded too slow
 
   coords.forEach(c => {
-    const x = (c.x - centroid.x) * cubeSize
-    const y = (c.y - centroid.y) * cubeSize
-    const z = (c.z - centroid.z) * cubeSize
-    const offset = new CANNON.Vec3(x, y, z)
+    const lx = (c.x - centroid.x) * cubeSize
+    const ly = (c.y - centroid.y) * cubeSize
+    const lz = (c.z - centroid.z) * cubeSize
+
+    // Physics Body
+    const offset = new CANNON.Vec3(lx, ly, lz)
     body.addShape(new CANNON.Box(halfExtents), offset)
 
+    // Visual Mesh
     const mesh = new THREE.Mesh(geometry, material)
-    mesh.position.set(x, y, z)
+    mesh.position.set(lx, ly, lz)
     mesh.castShadow = true
     mesh.receiveShadow = true
+
+    // Slight random rotation for "imperfect" organic look? No, keep aligned for stacking.
+
     group.add(mesh)
   })
 
@@ -243,6 +344,13 @@ function spawnPolyomino(position) {
 
   const minOffset = new CANNON.Vec3(minX, minY, minZ)
   const maxOffset = new CANNON.Vec3(maxX, maxY, maxZ)
+
+  // Restore Reference Offset (of the first cube) for Snapping
+  const refC = coords[0]
+  const refX = (refC.x - centroid.x) * cubeSize
+  const refY = (refC.y - centroid.y) * cubeSize
+  const refZ = (refC.z - centroid.z) * cubeSize
+  const refOffset = new CANNON.Vec3(refX, refY, refZ)
 
   group.userData = { isBlock: true, body: body, refOffset: refOffset, minOffset, maxOffset }
   createObject(group, body)
@@ -337,7 +445,6 @@ function updateUI() {
 
 function toggleSelection(meshGroup) {
   if (selectedObject && selectedObject.mesh === meshGroup) {
-    // Already selected, do nothing or re-highlight
     return
   }
 
@@ -346,23 +453,60 @@ function toggleSelection(meshGroup) {
   const objData = objectsToUpdate.find(o => o.mesh === meshGroup)
   if (!objData) return
 
+  // Store original material & Swap to Glass
+  const meshes = []
+
+  // Create ONE glass material for the whole group (since they are one object logically)
+  // We grab the color from the first child to define the tint
+  let leadColor = 0xffffff
+  meshGroup.traverse(child => {
+    if (child.isMesh && leadColor === 0xffffff) leadColor = child.material.color.getHex()
+  })
+
+  // Glass Material
+  const glassMaterial = new THREE.MeshPhysicalMaterial({
+    color: leadColor,
+    emissive: leadColor,
+    emissiveIntensity: debugConfig.emissiveIntensity,
+    metalness: debugConfig.metalness,
+    roughness: debugConfig.roughness,
+    transmission: debugConfig.transmission, // Glass!
+    thickness: debugConfig.thickness, // Volume
+    transparent: true,
+    opacity: debugConfig.opacity, // Transmission handles the see-through
+    depthWrite: debugConfig.depthWrite,
+    side: THREE.DoubleSide, // Render back faces for "volume" feel
+    attenuationColor: leadColor, // Absorb color as light travels through
+    attenuationDistance: 2.0 // Distance for color absorption (tuning needed)
+  })
+
+  meshGroup.traverse(child => {
+    if (child.isMesh) {
+      meshes.push({
+        mesh: child,
+        originalMaterial: child.material // Store the whole material instance
+      })
+      child.material = glassMaterial
+      child.castShadow = true // Natural shadows requested
+      child.receiveShadow = true
+    }
+  })
+
   selectedObject = {
     mesh: meshGroup,
     body: objData.body,
     originalMass: objData.body.mass,
     userData: meshGroup.userData,
-    targetPosition: new CANNON.Vec3().copy(objData.body.position)
+    targetPosition: new CANNON.Vec3().copy(objData.body.position),
+    materialCache: meshes
   }
 
-  boxHelper.setFromObject(meshGroup)
-  boxHelper.visible = true
-
-  // Physics: Make Kinematic
-  selectedObject.body.type = CANNON.Body.KINEMATIC
-  selectedObject.body.velocity.set(0, 0, 0)
-  selectedObject.body.angularVelocity.set(0, 0, 0)
-  selectedObject.body.mass = 0
-  selectedObject.body.updateMassProperties()
+  interactionMode = 'move' // Default start mode
+  if (ui.hint) ui.hint.innerText = `Mode: MOVE`
+  if (ui.indicator) {
+    ui.indicator.innerText = "✥ MOVE"
+    ui.indicator.classList.remove('hidden')
+  }
 
   updateUI()
 }
@@ -370,13 +514,21 @@ function toggleSelection(meshGroup) {
 function deselect() {
   if (!selectedObject) return
 
-  boxHelper.visible = false
+  // Restore Original Material
+  if (selectedObject.materialCache) {
+    selectedObject.materialCache.forEach(data => {
+      data.mesh.material = data.originalMaterial
+      data.mesh.castShadow = true
+      data.mesh.receiveShadow = true
+    })
+  }
 
-  // Physics: Make Dynamic again
-  selectedObject.body.type = CANNON.Body.DYNAMIC
-  selectedObject.body.mass = selectedObject.originalMass
-  selectedObject.body.updateMassProperties()
+  // boxHelper.visible = false
+
+  // Physics: Make Dynamic again (already dynamic, but wake up)
   selectedObject.body.wakeUp()
+
+  if (ui.indicator) ui.indicator.classList.add('hidden')
 
   selectedObject = null
   updateUI()
@@ -411,6 +563,9 @@ const dragPlane = new THREE.Plane()
 const intersection = new THREE.Vector3()
 const offset = new THREE.Vector3()
 let isDragging = false
+let dragStartX = 0
+let dragStartY = 0
+let hasMoved = false
 
 function getRayIntersections(clientX, clientY) {
   mouse.x = (clientX / window.innerWidth) * 2 - 1
@@ -423,7 +578,7 @@ function getRayIntersections(clientX, clientY) {
 
 function onPointerDown(event) {
   // Check if UI was clicked
-  if (event.target.closest('button')) return // Handled by button listeners
+  if (event.target.closest('button') || event.target.closest('.lil-gui')) return // Handled by button/gui listeners
 
   let clientX, clientY
   if (event.touches) {
@@ -444,13 +599,16 @@ function onPointerDown(event) {
 
     if (hitObject.userData.isBlock) {
       if (selectedObject && selectedObject.mesh === hitObject) {
-        // Start Dragging
+        // Start Interaction (Move or Rotate)
         isDragging = true
+        dragStartX = clientX
+        dragStartY = clientY
+        hasMoved = false
 
-        // Setup Drag Plane
+        // Setup Drag Plane for Move Mode
         dragPlane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), selectedObject.mesh.position)
 
-        // Calculate offset
+        // Calculate offset (for Move Mode)
         mouse.x = (clientX / window.innerWidth) * 2 - 1
         mouse.y = -(clientY / window.innerHeight) * 2 + 1
         raycaster.setFromCamera(mouse, camera)
@@ -482,31 +640,73 @@ function onPointerMove(event) {
     clientY = event.clientY
   }
 
-  mouse.x = (clientX / window.innerWidth) * 2 - 1
-  mouse.y = -(clientY / window.innerHeight) * 2 + 1
-  raycaster.setFromCamera(mouse, camera)
+  // Check for movement threshold to distinguish tap from drag
+  const dx = clientX - dragStartX
+  const dy = clientY - dragStartY
+  if (!hasMoved && Math.hypot(dx, dy) > 10) { // Increased threshold to 10px
+    hasMoved = true
+  }
 
-  if (raycaster.ray.intersectPlane(dragPlane, intersection)) {
-    const rawPos = new THREE.Vector3().addVectors(intersection, offset)
-    const rawBodyPos = new CANNON.Vec3(rawPos.x, selectedObject.mesh.position.y, rawPos.z)
+  if (!hasMoved) return // DO NOT Move or Rotate until threshold passed
 
-    // Robust Snap using Reference Offset
-    let snappedPos = getSnappedPosition(rawBodyPos, selectedObject.body.quaternion, selectedObject.userData.refOffset)
+  if (interactionMode === 'move') {
+    // --- MOVE MODE: Existing Drag Logic ---
+    mouse.x = (clientX / window.innerWidth) * 2 - 1
+    mouse.y = -(clientY / window.innerHeight) * 2 + 1
+    raycaster.setFromCamera(mouse, camera)
 
-    // Bounds Clamp
-    if (selectedObject.userData.minOffset && selectedObject.userData.maxOffset) {
-      snappedPos = getClampedPosition(snappedPos, selectedObject.body.quaternion, selectedObject.userData.minOffset, selectedObject.userData.maxOffset)
+    if (raycaster.ray.intersectPlane(dragPlane, intersection)) {
+      const rawPos = new THREE.Vector3().addVectors(intersection, offset)
+      const rawBodyPos = new CANNON.Vec3(rawPos.x, selectedObject.mesh.position.y, rawPos.z)
+
+      // Robust Snap using Reference Offset
+      let snappedPos = getSnappedPosition(rawBodyPos, selectedObject.body.quaternion, selectedObject.userData.refOffset)
+
+      // Bounds Clamp
+      if (selectedObject.userData.minOffset && selectedObject.userData.maxOffset) {
+        snappedPos = getClampedPosition(snappedPos, selectedObject.body.quaternion, selectedObject.userData.minOffset, selectedObject.userData.maxOffset)
+      }
+
+      // Update TARGET
+      selectedObject.targetPosition.x = snappedPos.x
+      selectedObject.targetPosition.z = snappedPos.z
+
+      boxHelper.update()
     }
+  } else if (interactionMode === 'rotate') {
+    // --- ROTATE MODE: Swipe Logic ---
+    const SWIPE_THRESHOLD = 30
 
-    // Update TARGET
-    selectedObject.targetPosition.x = snappedPos.x
-    selectedObject.targetPosition.z = snappedPos.z
-
-    boxHelper.update()
+    if (Math.abs(dx) > SWIPE_THRESHOLD) {
+      // Horizontal Swipe -> Y Axis Rotation
+      const dir = Math.sign(dx)
+      rotateBlock(new CANNON.Vec3(0, 1, 0), dir * Math.PI / 2)
+      // Reset drag start to allow multiple steps or debounce
+      dragStartX = clientX
+      dragStartY = clientY
+    } else if (Math.abs(dy) > SWIPE_THRESHOLD) {
+      // Vertical Swipe -> X Axis Rotation (Tumble forward/back)
+      const dir = Math.sign(dy)
+      rotateBlock(new CANNON.Vec3(1, 0, 0), dir * Math.PI / 2)
+      dragStartX = clientX
+      dragStartY = clientY
+    }
   }
 }
 
 function onPointerUp() {
+  if (isDragging && !hasMoved && selectedObject) {
+    // Tap Detected on Selected Object -> Toggle Mode
+    interactionMode = interactionMode === 'move' ? 'rotate' : 'move'
+
+    // UX Feedback
+    if (ui.hint) ui.hint.innerText = `Mode: ${interactionMode.toUpperCase()}`
+    if (ui.indicator) {
+      ui.indicator.innerText = interactionMode === 'move' ? "✥ MOVE" : "↻ ROTATE"
+    }
+
+    console.log("Switched to", interactionMode)
+  }
   isDragging = false
   controls.enabled = true // Re-enable camera
 }
@@ -673,24 +873,60 @@ function animate() {
   // Update Physics
   world.step(TIME_STEP, deltaTime, 3)
 
-  // Sync Objects
+  // Sync Objects & Stabilize
   for (const object of objectsToUpdate) {
     if (selectedObject && object.body === selectedObject.body) {
       // Manual Slide Interpolation for Selected Object
-      if (selectedObject.targetPosition) {
-        // LERP Factor
-        const lerpFactor = 0.2 // Tuning
+      object.body.velocity.set(0, 0, 0)
+      object.body.angularVelocity.set(0, 0, 0)
 
-        const dx = selectedObject.targetPosition.x - object.body.position.x
-        const dz = selectedObject.targetPosition.z - object.body.position.z
+      // Move visual mesh smoothly to target
+      object.mesh.position.lerp(selectedObject.targetPosition, 0.2)
+      object.mesh.quaternion.slerp(object.body.quaternion, 0.2) // smooth rotation
 
-        // Helper: Approach target
-        object.body.position.x += dx * lerpFactor
-        object.body.position.z += dz * lerpFactor
+      // Sync Body to Mesh (Kinematic-like control)
+      // Actually we want body to be the source of truth for physics, but here we drive it manually.
+      // So we set body to match strict snap, while mesh lerps for visual.
+      // object.body.position.copy(selectedObject.targetPosition) // Don't do this, physics needs to simulate?
+      // No, we are overriding physics for the selected object (gravity only on Y?)
+      // We decided earlier: Gravity only on Y. X/Z manually controlled.
+      object.body.position.x = selectedObject.targetPosition.x
+      object.body.position.z = selectedObject.targetPosition.z
+      // Y is handled by physics (gravity)
 
-        // Snap if very close to stop micro-jitters
-        if (Math.abs(dx) < 0.001) object.body.position.x = selectedObject.targetPosition.x
-        if (Math.abs(dz) < 0.001) object.body.position.z = selectedObject.targetPosition.z
+      // Update Mode Indicator Position
+      if (ui.indicator) {
+        const pos = object.mesh.position.clone()
+        pos.y += 1.5 // Float above
+        pos.project(camera)
+
+        const x = (pos.x * .5 + .5) * window.innerWidth
+        const y = (-(pos.y * .5) + .5) * window.innerHeight
+
+        ui.indicator.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`
+      }
+
+    } else {
+      // STABILIZER for Resting Blocks
+      // If block is moving slowly AND vertical velocity is low (grounded), snap it/drift it.
+      const speed = object.body.velocity.length()
+      const vY = Math.abs(object.body.velocity.y)
+
+      if (speed < 0.5 && vY < 0.1 && object.body.mass > 0) {
+        // Check if we have refOffset
+        if (object.mesh.userData && object.mesh.userData.refOffset) {
+          const snapped = getSnappedPosition(object.body.position, object.body.quaternion, object.mesh.userData.refOffset)
+
+          // Gently drift to snap (Micro-correction)
+          // Correct X/Z only
+          const correctionFactor = 0.1
+          object.body.position.x += (snapped.x - object.body.position.x) * correctionFactor
+          object.body.position.z += (snapped.z - object.body.position.z) * correctionFactor
+
+          // Kill horizontal drift velocity
+          object.body.velocity.x *= 0.5
+          object.body.velocity.z *= 0.5
+        }
       }
     }
 
