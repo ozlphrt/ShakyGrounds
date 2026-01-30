@@ -1,0 +1,614 @@
+import './style.css'
+import * as THREE from 'three'
+import * as CANNON from 'cannon-es'
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js'
+
+// --- Configuration ---
+const TIME_STEP = 1 / 60
+
+// --- Scene Setup ---
+const scene = new THREE.Scene()
+scene.background = new THREE.Color(0x202025)
+scene.fog = new THREE.Fog(0x202025, 10, 50)
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100)
+camera.position.set(0, 12, 12)
+camera.lookAt(0, 0, 0)
+
+const renderer = new THREE.WebGLRenderer({ antialias: true })
+renderer.setSize(window.innerWidth, window.innerHeight)
+renderer.shadowMap.enabled = true
+renderer.shadowMap.type = THREE.PCFSoftShadowMap
+document.body.appendChild(renderer.domElement)
+
+// --- Lights ---
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6)
+scene.add(ambientLight)
+
+const directionalLight = new THREE.DirectionalLight(0xffffff, 1)
+directionalLight.position.set(5, 20, 10)
+directionalLight.castShadow = true
+directionalLight.shadow.mapSize.width = 2048
+directionalLight.shadow.mapSize.height = 2048
+directionalLight.shadow.camera.near = 0.5
+directionalLight.shadow.camera.far = 50
+directionalLight.shadow.camera.left = -15
+directionalLight.shadow.camera.right = 15
+directionalLight.shadow.camera.top = 15
+directionalLight.shadow.camera.bottom = -15
+scene.add(directionalLight)
+
+// --- Physics Setup ---
+const world = new CANNON.World()
+world.gravity.set(0, -9.82, 0)
+world.broadphase = new CANNON.SAPBroadphase(world)
+const defaultMaterial = new CANNON.Material('default')
+const defaultContactMaterial = new CANNON.ContactMaterial(defaultMaterial, defaultMaterial, {
+  friction: 0.5,
+  restitution: 0.0,
+})
+world.addContactMaterial(defaultContactMaterial)
+
+// --- Debug/View Controls ---
+const controls = new OrbitControls(camera, renderer.domElement)
+controls.enableDamping = true
+controls.maxPolarAngle = Math.PI / 2 - 0.1
+
+// --- Objects ---
+const objectsToUpdate = []
+
+function createObject(mesh, body) {
+  scene.add(mesh)
+  world.addBody(body)
+  objectsToUpdate.push({ mesh, body })
+  return { mesh, body }
+}
+
+// 1. Static Ground
+const groundGeometry = new THREE.PlaneGeometry(100, 100)
+const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0, roughness: 1 })
+const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial)
+groundMesh.rotation.x = -Math.PI * 0.5
+groundMesh.receiveShadow = true
+scene.add(groundMesh)
+
+const groundBody = new CANNON.Body({
+  type: CANNON.Body.STATIC,
+  shape: new CANNON.Plane(),
+})
+groundBody.quaternion.setFromEuler(-Math.PI * 0.5, 0, 0)
+world.addBody(groundBody)
+
+// 2. 8x8 Base Plate
+const plateSize = 8
+const plateHeight = 0.5
+const plateGeometry = new THREE.BoxGeometry(plateSize, plateHeight, plateSize)
+const plateMaterial = new THREE.MeshStandardMaterial({ color: 0x444455, metalness: 0.2, roughness: 0.8 })
+const plateMesh = new THREE.Mesh(plateGeometry, plateMaterial)
+plateMesh.position.y = plateHeight / 2
+plateMesh.receiveShadow = true
+scene.add(plateMesh)
+
+const plateBody = new CANNON.Body({
+  type: CANNON.Body.STATIC,
+  shape: new CANNON.Box(new CANNON.Vec3(plateSize / 2, plateHeight / 2, plateSize / 2)),
+  position: new CANNON.Vec3(0, plateHeight / 2, 0),
+  material: defaultMaterial
+})
+world.addBody(plateBody)
+
+const gridHelper = new THREE.GridHelper(plateSize, 8, 0x888888, 0x555555)
+gridHelper.position.y = plateHeight + 0.01
+scene.add(gridHelper)
+
+
+
+// --- Logic Variables ---
+let selectedObject = null; // { mesh, body, initialMass }
+let blockCount = 0;
+
+// --- UI Elements ---
+const ui = {
+  container: document.getElementById('ui-container'),
+  hint: document.getElementById('controls-hint'),
+  controls: document.getElementById('selected-controls'),
+  btnSpawn: document.getElementById('btn-spawn'),
+  btnDrop: document.getElementById('btn-drop'),
+  moveBtns: document.querySelectorAll('.btn-move'),
+  rotBtns: document.querySelectorAll('.btn-rot'),
+  score: document.getElementById('score-display'),
+}
+
+// Visual Helpers
+const boxHelper = new THREE.BoxHelper(new THREE.Object3D(), 0xffff00)
+scene.add(boxHelper)
+boxHelper.visible = false
+
+
+// --- Functions ---
+
+function spawnBlock() {
+  spawnPolyomino(new THREE.Vector3(0.5, 10, 0.5)) // Center of Grid Cell
+  blockCount++
+  if (ui.score) ui.score.innerText = `Blocks: ${blockCount}`
+}
+
+
+function spawnPolyomino(position) {
+  const numCubes = Math.floor(Math.random() * 8) + 1
+  const cubeSize = 1.0
+  const halfExtents = new CANNON.Vec3(cubeSize * 0.5, cubeSize * 0.5, cubeSize * 0.5)
+
+  // Generate Coords
+  const coords = [{ x: 0, y: 0, z: 0 }]
+  while (coords.length < numCubes) {
+    const parent = coords[Math.floor(Math.random() * coords.length)]
+    const dirs = [
+      { x: 1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 },
+      { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 },
+      { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 }
+    ]
+    const dir = dirs[Math.floor(Math.random() * dirs.length)]
+    const newCoord = { x: parent.x + dir.x, y: parent.y + dir.y, z: parent.z + dir.z }
+    if (!coords.some(c => c.x === newCoord.x && c.y === newCoord.y && c.z === newCoord.z)) {
+      coords.push(newCoord)
+    }
+  }
+
+  // Centroid
+  const centroid = coords.reduce((acc, c) => ({ x: acc.x + c.x, y: acc.y + c.y, z: acc.z + c.z }), { x: 0, y: 0, z: 0 })
+  centroid.x /= numCubes
+  centroid.y /= numCubes
+  centroid.z /= numCubes
+
+  const group = new THREE.Group()
+  group.position.copy(position)
+
+  const mass = numCubes * 1.0
+  const body = new CANNON.Body({
+    mass: mass,
+    position: new CANNON.Vec3(position.x, position.y, position.z),
+    material: defaultMaterial
+  })
+
+  const geometry = new RoundedBoxGeometry(cubeSize, cubeSize, cubeSize, 4, 0.05)
+  const material = new THREE.MeshStandardMaterial({
+    color: Math.random() * 0xffffff,
+    metalness: 0.1,
+    roughness: 0.5
+  })
+
+  // Store Reference Offset (of the first cube) for Snapping
+  // This allows us to alignment ANY block (odd/even) such that its cubes hit grid centers.
+  const refC = coords[0]
+  const refX = (refC.x - centroid.x) * cubeSize
+  const refY = (refC.y - centroid.y) * cubeSize
+  const refZ = (refC.z - centroid.z) * cubeSize
+  const refOffset = new CANNON.Vec3(refX, refY, refZ)
+
+  coords.forEach(c => {
+    const x = (c.x - centroid.x) * cubeSize
+    const y = (c.y - centroid.y) * cubeSize
+    const z = (c.z - centroid.z) * cubeSize
+    const offset = new CANNON.Vec3(x, y, z)
+    body.addShape(new CANNON.Box(halfExtents), offset)
+
+    const mesh = new THREE.Mesh(geometry, material)
+    mesh.position.set(x, y, z)
+    mesh.castShadow = true
+    mesh.receiveShadow = true
+    group.add(mesh)
+  })
+
+  group.userData = { isBlock: true, body: body, refOffset: refOffset }
+  createObject(group, body)
+
+  // Initial Snap
+  const snappedPos = getSnappedPosition(body.position, body.quaternion, refOffset)
+  body.position.copy(snappedPos)
+  group.position.copy(snappedPos)
+}
+
+// Helper for Robust Snapping
+function getSnappedPosition(currentPos, quaternion, refOffset) {
+  // 1. Calculate World Position of the Reference Cube
+  // refOffset is Vec3 (local), quaternion is CANNON.Quaternion
+  const rotatedOffset = new CANNON.Vec3().copy(refOffset)
+  quaternion.vmult(rotatedOffset, rotatedOffset)
+
+  const cubeWorldPos = currentPos.vadd(rotatedOffset)
+
+  // 2. Snap Reference Cube to nearest Grid Center (X.5)
+  // Math.round(val - 0.5) + 0.5
+  const snappedCubeX = Math.round(cubeWorldPos.x - 0.5) + 0.5
+  const snappedCubeZ = Math.round(cubeWorldPos.z - 0.5) + 0.5
+
+  // 3. Calculate necessary Body Position to achieve this
+  const newBodyX = snappedCubeX - rotatedOffset.x
+  const newBodyZ = snappedCubeZ - rotatedOffset.z
+
+  return new CANNON.Vec3(newBodyX, currentPos.y, newBodyZ)
+}
+
+function updateUI() {
+  if (selectedObject) {
+    ui.hint.classList.add('hidden')
+    ui.controls.classList.remove('hidden')
+  } else {
+    ui.hint.classList.remove('hidden')
+    ui.controls.classList.add('hidden')
+  }
+}
+
+function toggleSelection(meshGroup) {
+  if (selectedObject && selectedObject.mesh === meshGroup) {
+    // Already selected, do nothing or re-highlight
+    return
+  }
+
+  if (selectedObject) deselect()
+
+  const objData = objectsToUpdate.find(o => o.mesh === meshGroup)
+  if (!objData) return
+
+  selectedObject = {
+    mesh: meshGroup,
+    body: objData.body,
+    originalMass: objData.body.mass,
+    userData: meshGroup.userData, // Ensure refOffset is accessible
+    targetPosition: new CANNON.Vec3().copy(objData.body.position)
+  }
+
+  boxHelper.setFromObject(meshGroup)
+  boxHelper.visible = true
+
+  // Physics: Make Kinematic
+  selectedObject.body.type = CANNON.Body.KINEMATIC
+  selectedObject.body.velocity.set(0, 0, 0)
+  selectedObject.body.angularVelocity.set(0, 0, 0)
+  selectedObject.body.mass = 0
+  selectedObject.body.updateMassProperties()
+
+  updateUI()
+}
+
+function deselect() {
+  if (!selectedObject) return
+
+  boxHelper.visible = false
+
+  // Physics: Make Dynamic again
+  selectedObject.body.type = CANNON.Body.DYNAMIC
+  selectedObject.body.mass = selectedObject.originalMass
+  selectedObject.body.updateMassProperties()
+  selectedObject.body.wakeUp()
+
+  selectedObject = null
+  updateUI()
+}
+
+function moveBlock(x, y, z) {
+  if (!selectedObject) return
+  selectedObject.body.position.x += x
+  selectedObject.body.position.y += y
+  selectedObject.body.position.z += z
+}
+
+function rotateBlock(axis, angle) {
+  if (!selectedObject) return
+  const q = new CANNON.Quaternion()
+  q.setFromAxisAngle(axis, angle)
+  selectedObject.body.quaternion = q.mult(selectedObject.body.quaternion)
+
+  // Re-snap Position because rotating around centroid might misalign the grid
+  const snappedPos = getSnappedPosition(selectedObject.body.position, selectedObject.body.quaternion, selectedObject.userData.refOffset)
+  selectedObject.body.position.copy(snappedPos)
+  if (selectedObject.targetPosition) selectedObject.targetPosition.copy(snappedPos)
+}
+
+
+// --- Interaction Listeners ---
+
+// Mouse/Touch Raycast
+const raycaster = new THREE.Raycaster()
+const mouse = new THREE.Vector2()
+const dragPlane = new THREE.Plane()
+const intersection = new THREE.Vector3()
+const offset = new THREE.Vector3()
+let isDragging = false
+
+function getRayIntersections(clientX, clientY) {
+  mouse.x = (clientX / window.innerWidth) * 2 - 1
+  mouse.y = -(clientY / window.innerHeight) * 2 + 1
+  raycaster.setFromCamera(mouse, camera)
+
+  const intersectableMeshes = objectsToUpdate.map(o => o.mesh)
+  return raycaster.intersectObjects(intersectableMeshes, true)
+}
+
+function onPointerDown(event) {
+  // Check if UI was clicked
+  if (event.target.closest('button')) return // Handled by button listeners
+
+  let clientX, clientY
+  if (event.touches) {
+    clientX = event.touches[0].clientX
+    clientY = event.touches[0].clientY
+  } else {
+    clientX = event.clientX
+    clientY = event.clientY
+  }
+
+  const intersects = getRayIntersections(clientX, clientY)
+
+  if (intersects.length > 0) {
+    let hitObject = intersects[0].object
+    while (hitObject.parent && !hitObject.userData.isBlock && hitObject !== scene) {
+      hitObject = hitObject.parent
+    }
+
+    if (hitObject.userData.isBlock) {
+      if (selectedObject && selectedObject.mesh === hitObject) {
+        // Start Dragging
+        isDragging = true
+
+        // Setup Drag Plane
+        dragPlane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), selectedObject.mesh.position)
+
+        // Calculate offset
+        mouse.x = (clientX / window.innerWidth) * 2 - 1
+        mouse.y = -(clientY / window.innerHeight) * 2 + 1
+        raycaster.setFromCamera(mouse, camera)
+        if (raycaster.ray.intersectPlane(dragPlane, intersection)) {
+          offset.subVectors(selectedObject.mesh.position, intersection)
+        }
+
+        controls.enabled = false // Disable camera
+      } else {
+        toggleSelection(hitObject)
+      }
+    } else {
+      deselect()
+    }
+  } else {
+    deselect() // Clicked empty space
+  }
+}
+
+function onPointerMove(event) {
+  if (!isDragging || !selectedObject) return
+
+  let clientX, clientY
+  if (event.touches) {
+    clientX = event.touches[0].clientX
+    clientY = event.touches[0].clientY
+  } else {
+    clientX = event.clientX
+    clientY = event.clientY
+  }
+
+  mouse.x = (clientX / window.innerWidth) * 2 - 1
+  mouse.y = -(clientY / window.innerHeight) * 2 + 1
+  raycaster.setFromCamera(mouse, camera)
+
+  if (raycaster.ray.intersectPlane(dragPlane, intersection)) {
+    const rawPos = new THREE.Vector3().addVectors(intersection, offset)
+    const rawBodyPos = new CANNON.Vec3(rawPos.x, selectedObject.mesh.position.y, rawPos.z)
+
+    // Robust Snap using Reference Offset
+    const snappedPos = getSnappedPosition(rawBodyPos, selectedObject.body.quaternion, selectedObject.userData.refOffset)
+
+    // Update TARGET
+    selectedObject.targetPosition.x = snappedPos.x
+    selectedObject.targetPosition.z = snappedPos.z
+
+    boxHelper.update()
+  }
+}
+
+function onPointerUp() {
+  isDragging = false
+  controls.enabled = true // Re-enable camera
+}
+
+window.addEventListener('mousedown', onPointerDown)
+window.addEventListener('mousemove', onPointerMove)
+window.addEventListener('mouseup', onPointerUp)
+window.addEventListener('touchstart', onPointerDown, { passive: false })
+window.addEventListener('touchmove', onPointerMove, { passive: false })
+window.addEventListener('touchend', onPointerUp)
+
+
+// UI Listeners
+// Prevent propagation on container
+ui.container.addEventListener('touchstart', e => {
+  if (e.target.closest('button')) e.stopPropagation()
+}, { passive: false })
+ui.container.addEventListener('mousedown', e => {
+  if (e.target.closest('button')) e.stopPropagation()
+})
+
+ui.btnSpawn.addEventListener('click', spawnBlock)
+ui.btnDrop.addEventListener('click', deselect)
+
+ui.moveBtns.forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const key = e.target.closest('button').dataset.key
+    const speed = 1.0
+    switch (key) {
+      case 'ArrowUp': moveBlock(0, 0, -speed); break;
+      case 'ArrowDown': moveBlock(0, 0, speed); break;
+      case 'ArrowLeft': moveBlock(-speed, 0, 0); break;
+      case 'ArrowRight': moveBlock(speed, 0, 0); break;
+    }
+  })
+})
+
+ui.rotBtns.forEach(btn => {
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const target = e.target.closest('button')
+    const axisName = target.dataset.axis
+    const dir = parseInt(target.dataset.dir)
+    let axis = new CANNON.Vec3(0, 1, 0)
+    if (axisName === 'x') axis.set(1, 0, 0)
+    if (axisName === 'z') axis.set(0, 0, 1)
+
+    rotateBlock(axis, Math.PI / 2 * dir)
+  })
+})
+
+// Keyboard Fallback
+
+function moveBlockCameraRelative(xInput, zInput) {
+  if (!selectedObject) return
+  const SNAP = 1.0 // Full step size
+
+  // Get Camera Direction (Projected to XZ plane)
+  const forward = new THREE.Vector3()
+  camera.getWorldDirection(forward)
+  forward.y = 0
+  forward.normalize()
+
+  // Get Right Vector
+  const right = new THREE.Vector3()
+  right.crossVectors(forward, new THREE.Vector3(0, 1, 0))
+
+  // Determine Primary Movement Intent
+  const rawMove = new THREE.Vector3()
+  rawMove.addScaledVector(forward, zInput)
+  rawMove.addScaledVector(right, xInput)
+
+  // Snap rawMove to closest Cardinal Direction
+  let bestAxis = new THREE.Vector3()
+  let maxDot = -Infinity
+
+  const axes = [
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(0, 0, 1),
+    new THREE.Vector3(0, 0, -1)
+  ]
+
+  if (rawMove.lengthSq() > 0.1) {
+    rawMove.normalize()
+    for (const axis of axes) {
+      const dot = rawMove.dot(axis)
+      if (dot > maxDot) {
+        maxDot = dot
+        bestAxis.copy(axis)
+      }
+    }
+  } else {
+    return
+  }
+
+  // Apply Input to Target
+  // Use current targetPosition if available, else body position
+  const startX = selectedObject.targetPosition ? selectedObject.targetPosition.x : selectedObject.body.position.x
+  const startZ = selectedObject.targetPosition ? selectedObject.targetPosition.z : selectedObject.body.position.z
+
+  const tentativePos = new CANNON.Vec3(
+    startX + bestAxis.x * SNAP,
+    selectedObject.body.position.y,
+    startZ + bestAxis.z * SNAP
+  )
+
+  // Robust Snap this tentative position
+  const snappedPos = getSnappedPosition(tentativePos, selectedObject.body.quaternion, selectedObject.userData.refOffset)
+
+  // Init target if needed (should be set on selection but safety check)
+  if (!selectedObject.targetPosition) selectedObject.targetPosition = new CANNON.Vec3().copy(selectedObject.body.position)
+
+  selectedObject.targetPosition.x = snappedPos.x
+  selectedObject.targetPosition.z = snappedPos.z
+}
+
+
+// Keyboard Fallback
+window.addEventListener('keydown', (e) => {
+  if (!selectedObject) return
+  const speed = 1.0 // This effectively becomes grid units if normalized? No, world units. 
+  // Snap will handle grid alignment.
+
+  switch (e.key) {
+    // WASD -> Move Relative to Camera
+    case 'w': moveBlockCameraRelative(0, speed); break;  // Forward
+    case 's': moveBlockCameraRelative(0, -speed); break; // Backward
+    case 'a': moveBlockCameraRelative(-speed, 0); break; // Left
+    case 'd': moveBlockCameraRelative(speed, 0); break;  // Right
+
+    // Arrows -> Rotate
+    case 'ArrowUp': rotateBlock(new CANNON.Vec3(1, 0, 0), -Math.PI / 2); break;
+    case 'ArrowDown': rotateBlock(new CANNON.Vec3(1, 0, 0), Math.PI / 2); break;
+    case 'ArrowLeft': rotateBlock(new CANNON.Vec3(0, 1, 0), Math.PI / 2); break;
+    case 'ArrowRight': rotateBlock(new CANNON.Vec3(0, 1, 0), -Math.PI / 2); break;
+
+    case 'q': rotateBlock(new CANNON.Vec3(0, 0, 1), Math.PI / 2); break;
+    case 'e': rotateBlock(new CANNON.Vec3(0, 0, 1), -Math.PI / 2); break;
+
+    case 'Enter': deselect(); break;
+    case 'Escape': deselect(); break;
+  }
+})
+
+
+
+
+// --- Game Loop ---
+const clock = new THREE.Clock()
+let oldElapsedTime = 0
+
+function animate() {
+  const elapsedTime = clock.getElapsedTime()
+  const deltaTime = elapsedTime - oldElapsedTime
+  oldElapsedTime = elapsedTime
+
+  // Update Physics
+  world.step(TIME_STEP, deltaTime, 3)
+
+  // Sync Objects
+  for (const object of objectsToUpdate) {
+    if (selectedObject && object.body === selectedObject.body) {
+      // Manual Slide Interpolation for Selected Object
+      if (selectedObject.targetPosition) {
+        // LERP Factor
+        const lerpFactor = 0.2 // Tuning
+
+        const dx = selectedObject.targetPosition.x - object.body.position.x
+        const dz = selectedObject.targetPosition.z - object.body.position.z
+
+        // Helper: Approach target
+        object.body.position.x += dx * lerpFactor
+        object.body.position.z += dz * lerpFactor
+
+        // Snap if very close to stop micro-jitters
+        if (Math.abs(dx) < 0.001) object.body.position.x = selectedObject.targetPosition.x
+        if (Math.abs(dz) < 0.001) object.body.position.z = selectedObject.targetPosition.z
+      }
+    }
+
+    object.mesh.position.copy(object.body.position)
+    object.mesh.quaternion.copy(object.body.quaternion)
+  }
+
+  // Update Visuals relative to moving objects
+  if (selectedObject) {
+    boxHelper.update()
+  }
+
+  controls.update()
+  renderer.render(scene, camera)
+  requestAnimationFrame(animate)
+}
+
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight
+  camera.updateProjectionMatrix()
+  renderer.setSize(window.innerWidth, window.innerHeight)
+})
+
+animate()
