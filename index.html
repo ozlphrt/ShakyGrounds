@@ -11,15 +11,36 @@
   <div id="app"></div>
 
   <div id="ui-container">
+    <!-- Top Header with Game Info -->
     <div id="header">
-      <h1>Tower Builder</h1>
-      <span id="score-display">Blocks: 0</span>
-      <button id="btn-spawn">Spawn Block</button>
+      <div id="level-info">
+        <span id="world-name">Orientation</span>
+        <span id="level-display">Fill the gaps!</span>
+      </div>
+      <div id="score-section">
+        <span id="score-display">Score: 0</span>
+      </div>
+      <div id="stats-section">
+        <span id="lines-display">Lines: 0</span>
+      </div>
     </div>
 
-    <div id="controls-hint" class="hidden">
-      <div id="controls-hint">Tap Block to Toggle Mode</div>
+    <!-- Layer Clear Feedback -->
+    <div id="clear-feedback" class="hidden">
+      <span id="clear-text">+100</span>
     </div>
+
+    <!-- Game Over Overlay -->
+    <div id="game-over-overlay" class="hidden">
+      <div id="game-over-content">
+        <h2 id="game-over-title">Game Over</h2>
+        <p id="final-score">Score: 0</p>
+        <p id="final-level">Level: 1</p>
+        <p id="final-lines">Lines Cleared: 0</p>
+        <button id="btn-restart">Play Again</button>
+      </div>
+    </div>
+
     <div id="mode-indicator" class="hidden"></div>
     <div id="selected-controls" class="hidden">
       <div class="control-group dpad">
@@ -34,6 +55,10 @@
         <p class="label">Move</p>
       </div>
 
+    </div>
+    
+    <div id="bottom-controls">
+      <button id="btn-spawn">Next Block</button>
     </div>
   </div>
 

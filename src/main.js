@@ -4,7 +4,13 @@ import * as CANNON from 'cannon-es'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js'
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
+import { Brush, Evaluator, ADDITION } from 'three-bvh-csg'
 import GUI from 'lil-gui'
+
+// Game systems
+import { gameManager } from './game.js'
+import { occupancyGrid, GRID_SIZE, MAX_HEIGHT, PLATE_HEIGHT } from './grid.js'
+import { getShape, normalizeShape } from './shapes.js'
 
 // --- Configuration ---
 const TIME_STEP = 1 / 60
@@ -14,16 +20,18 @@ CANNON.Vec3.prototype.approxEquals = function (v, epsilon) {
 }
 
 const debugConfig = {
-  opacity: 0.687,
-  roughness: 0.503,
-  metalness: 0.1,
-  emissiveIntensity: 0,
-  transmission: 1,
-  thickness: 1,
-  depthWrite: true,
+  opacity: 0.712,
+  roughness: 0.527,
+  metalness: 0,
+  emissiveIntensity: 5,
+  transmission: 0,
+  thickness: 5,
+  depthWrite: false,
   envMapIntensity: 1,
   maxCells: 8,
-  palette: 'Mineral',
+  palette: 'Jewel',
+  blockMode: '2D', // '2D' = flat polyominoes, '3D' = polycubes
+  selectionLightIntensity: 50,
   saveToClipboard: () => {
     // Merge both configs for export
     // Note: lightConfig is defined later, but function runs on click so it should be fine?
@@ -51,15 +59,24 @@ const debugConfig = {
 
 const palettes = {
   'Pastel': null, // Random within HSL(0-1, 0.4-0.6, 0.5-0.7)
-  'Mineral': [0x7D8E95, 0xA9B3B9, 0xC7CED1, 0xEBEBEB, 0x586972], // Soft Greys/Blues
-  'Botanical': [0x5F7161, 0x6D8B74, 0x8F9779, 0xEFEAD8, 0xD0C9C0], // Sage/Fern/Beige
-  'Clay': [0x8D7B68, 0xA4907C, 0xC8B6A6, 0xF1DEC9, 0xCFB997], // Terracotta/Sand
-  'Oceanic': [0x4682B4, 0x5F9EA0, 0x87CEEB, 0xB0E0E6, 0xADD8E6], // Steel/Sky Blues
-  'Autumn': [0xCD853F, 0xDEB887, 0xF4A460, 0xD2691E, 0x8B4513], // Leafy browns/oranges (Natural)
-  'Berry': [0xBC8F8F, 0xDDA0DD, 0xDB7093, 0xFFB6C1, 0xC71585], // Muted Pinks/Purples
-  'Slate': [0x708090, 0x778899, 0xB0C4DE, 0xE6E6FA, 0xD3D3D3], // Blue-Greys
-  'Savanna': [0xE9967A, 0xF08080, 0xFFA07A, 0xFFDAB9, 0xFFE4B5], // Warm dusty pinks/peaches
-  'Midnight': [0x2F4F4F, 0x483D8B, 0x4682B4, 0x5D3FD3, 0x7B68EE], // Darker but rich (not black)
+  'Vivid': [0xFF3B30, 0xFF9500, 0xFFCC00, 0x34C759, 0x007AFF, 0x5856D6, 0xAF52DE, 0x00C7BE], // Red, Orange, Yellow, Green, Blue, Indigo, Purple, Teal
+  'Rainbow': [0xE63946, 0xF4A261, 0xE9C46A, 0x2A9D8F, 0x264653, 0x6A4C93, 0x1982C4, 0x8AC926], // Classic rainbow spectrum
+  'Neon': [0xFF0080, 0xFF4D00, 0xFFE600, 0x00FF66, 0x00CCFF, 0x9933FF, 0xFF3366, 0x00FFCC], // Electric neon glow
+  'Candy': [0xFF6B6B, 0xFFE66D, 0x4ECDC4, 0x95E1D3, 0xF38181, 0xAA96DA, 0xFCBAD3, 0xA8D8EA], // Sweet candy colors
+  'Jewel': [0xB85C5C, 0xC4956A, 0xD4B87A, 0x5A8A7A, 0x4A6A8A, 0x7A5A8A, 0x8A6A9A, 0x5A8A8A], // Muted jewel tones
+  'Mineral': [0x7D8E95, 0xA9B3B9, 0xC7CED1, 0xEBEBEB, 0x586972, 0x8FA3AD, 0xB8C5CC, 0x6B7D85], // Soft Greys/Blues
+  'Botanical': [0x5F7161, 0x6D8B74, 0x8F9779, 0xEFEAD8, 0xD0C9C0, 0x7A9B7E, 0xA8C4A2, 0x4A5D4B], // Sage/Fern/Beige
+  'Clay': [0x8D7B68, 0xA4907C, 0xC8B6A6, 0xF1DEC9, 0xCFB997, 0xB89F8B, 0xD4C4B0, 0x9A8675], // Terracotta/Sand
+  'Autumn': [0xCD853F, 0xDEB887, 0xF4A460, 0xD2691E, 0x8B4513, 0xE8A04C, 0xC97D3A, 0xA65E2E], // Leafy browns/oranges
+  'Forest': [0x228B22, 0x2E8B57, 0x3CB371, 0x6B8E23, 0x556B2F, 0x4A7C4A, 0x1E6B1E, 0x3D5E3D], // Deep greens, olive
+  'Earth': [0x8B4513, 0xA0522D, 0x6B4423, 0x8B7355, 0x704214, 0x946038, 0x7D5A4A, 0x5C3D2E], // Rich browns, soil
+  'Moss': [0x4A5D23, 0x7C9A5E, 0x8A9A5B, 0xADBF8C, 0x5E7D4C, 0x6B8B47, 0x98AD78, 0x3D4D2A], // Mossy greens
+  'Stone': [0x696969, 0x808080, 0xA9A9A9, 0x8B8682, 0x708090, 0x9A9A9A, 0x5A5A5A, 0x787878], // Natural greys
+  'Ocean': [0x1E6F7A, 0x2E8B8B, 0x4A9B9B, 0x367588, 0x5F9EA0, 0x3D8A8C, 0x1A5F6A, 0x4E8B8D], // Deep sea teals
+  'Sunset': [0xCC5500, 0xE07020, 0xD4A574, 0xC19A6B, 0xB87333, 0xE8843C, 0xD66B2C, 0xC48850], // Warm oranges/coppers
+  'Driftwood': [0x9C8B7D, 0xB5A898, 0xC4B9AD, 0x8B7D6B, 0xA69887, 0xAD9E90, 0x7D7063, 0xC9BFB4], // Weathered wood tones
+  'Slate': [0x708090, 0x778899, 0xB0C4DE, 0x8899AA, 0x5D6D7E, 0x9AACBE, 0x4D5D6E, 0x8695A4], // Blue-Greys
+  'Midnight': [0x2F4F4F, 0x36454F, 0x4A5568, 0x3D5A5A, 0x2C3E50, 0x1E3A3A, 0x3A4D5E, 0x2A3F4F], // Deep natural darks
 }
 
 const gui = new GUI()
@@ -73,6 +90,7 @@ window.addEventListener('keydown', (e) => {
   }
 })
 gui.add(debugConfig, 'palette', Object.keys(palettes)).name('Base Palette').onChange(updateAllBlockColors)
+gui.add(debugConfig, 'blockMode', ['2D', '3D']).name('Block Mode')
 gui.add(debugConfig, 'maxCells', 1, 8, 1).name('Max Polyomino Cubes')
 gui.add(debugConfig, 'saveToClipboard').name('💾 Save All Config')
 
@@ -84,6 +102,9 @@ matFolder.add(debugConfig, 'emissiveIntensity', 0, 5).onChange(updateSelectedMat
 matFolder.add(debugConfig, 'transmission', 0, 1).onChange(updateSelectedMaterial)
 matFolder.add(debugConfig, 'thickness', 0, 5).onChange(updateSelectedMaterial)
 matFolder.add(debugConfig, 'depthWrite').onChange(updateSelectedMaterial)
+matFolder.add(debugConfig, 'selectionLightIntensity', 0, 50).name('Selection Light').onChange((v) => {
+  if (selectionLight) selectionLight.intensity = v
+})
 matFolder.open()
 
 // Helper to rebuild geometry if radius changes (Complex, placeholder for now)
@@ -185,10 +206,10 @@ scene.add(fillLight)
 // 5. Rim Light (Silhouette Pop - Neutral)
 const rimLight = new THREE.SpotLight(0xffffff, 2.76)
 rimLight.position.set(0, 12, -15)
-rimLight.angle = 0.6
+rimLight.angle = 0.8
 rimLight.penumbra = 0.5
-rimLight.decay = 2
-rimLight.distance = 50
+rimLight.decay = 0 // No distance falloff for consistent rim lighting
+rimLight.distance = 0 // Infinite range
 const rimTarget = new THREE.Object3D()
 rimTarget.position.set(0, 4, 0)
 scene.add(rimTarget)
@@ -206,12 +227,12 @@ const lightConfig = {
 }
 
 const lightFolder = gui.addFolder('✨ Studio Lighting')
-lightFolder.add(lightConfig, 'exposure', 0, 2).name('Tone Exposure').onChange((v) => { renderer.toneMappingExposure = v })
-lightFolder.add(lightConfig, 'ambientIntensity', 0, 2).name('Global Ambient').onChange((v) => { ambientLight.intensity = v })
-lightFolder.add(lightConfig, 'keyIntensity', 0, 5).name('Key (Front-Top)').onChange((v) => { keyLight.intensity = v })
-lightFolder.add(lightConfig, 'fillIntensity', 0, 5).name('Fill (Side)').onChange((v) => { fillLight.intensity = v })
-lightFolder.add(lightConfig, 'rimIntensity', 0, 5).name('Rim (Back)').onChange((v) => { rimLight.intensity = v })
-lightFolder.add(lightConfig, 'envIntensity', 0, 3).name('Env Reflection').onChange((v) => { scene.environmentIntensity = v })
+lightFolder.add(lightConfig, 'exposure', 0, 0.2).name('Tone Exposure').onChange((v) => { renderer.toneMappingExposure = v })
+lightFolder.add(lightConfig, 'ambientIntensity', 0, 5).name('Global Ambient').onChange((v) => { ambientLight.intensity = v })
+lightFolder.add(lightConfig, 'keyIntensity', 0, 20).name('Key (Front-Top)').onChange((v) => { keyLight.intensity = v })
+lightFolder.add(lightConfig, 'fillIntensity', 0, 20).name('Fill (Side)').onChange((v) => { fillLight.intensity = v })
+lightFolder.add(lightConfig, 'rimIntensity', 0, 20).name('Rim (Back)').onChange((v) => { rimLight.intensity = v })
+lightFolder.add(lightConfig, 'envIntensity', 0, 10).name('Env Reflection').onChange((v) => { scene.environmentIntensity = v })
 lightFolder.open()
 
 // --- Physics Setup ---
@@ -230,15 +251,37 @@ const controls = new OrbitControls(camera, renderer.domElement)
 controls.enableDamping = true
 controls.maxPolarAngle = Math.PI / 2 - 0.1
 
+// Track user camera interactions to pause auto-zoom
+controls.addEventListener('start', () => {
+  userIsControllingCamera = true
+  lastCameraInteractionTime = performance.now()
+})
+
+controls.addEventListener('end', () => {
+  userIsControllingCamera = false
+  lastCameraInteractionTime = performance.now()
+})
+
+// Also track wheel zoom (change event fires during zoom)
+controls.addEventListener('change', () => {
+  lastCameraInteractionTime = performance.now()
+})
+
 // --- Dynamic Camera System ---
 const cameraConfig = {
   autoZoom: true,
   padding: 2.0,          // Minimum padding in world units
   minDistance: 8,        // Closest zoom allowed
   maxDistance: 60,       // Furthest zoom allowed
-  smoothing: 0.03,       // Lerp factor (lower = smoother)
+  smoothing: 0.008,      // Base lerp factor (very gentle)
+  recoveryDelay: 3.0,    // Seconds to wait after user input before auto-zoom resumes
+  recoverySmoothingMultiplier: 0.1, // During recovery, smoothing is multiplied by this (ultra slow)
   verticalBias: 0.3,     // How much to offset target upward (0-1 of content height)
 }
+
+// User interaction tracking for camera
+let lastCameraInteractionTime = 0
+let userIsControllingCamera = false
 
 // Camera folder in GUI
 const cameraFolder = gui.addFolder('📷 Dynamic Camera')
@@ -246,7 +289,8 @@ cameraFolder.add(cameraConfig, 'autoZoom').name('Auto Zoom')
 cameraFolder.add(cameraConfig, 'padding', 0, 5).name('Edge Padding')
 cameraFolder.add(cameraConfig, 'minDistance', 5, 20).name('Min Distance')
 cameraFolder.add(cameraConfig, 'maxDistance', 20, 100).name('Max Distance')
-cameraFolder.add(cameraConfig, 'smoothing', 0.01, 0.2).name('Smoothing')
+cameraFolder.add(cameraConfig, 'smoothing', 0.001, 0.05).name('Smoothing')
+cameraFolder.add(cameraConfig, 'recoveryDelay', 0.5, 10).name('Recovery Delay (s)')
 cameraFolder.open()
 
 /**
@@ -292,9 +336,29 @@ function computeFitDistance(radius) {
 /**
  * Update camera position/target to frame all content with minimum padding.
  * Called every frame when autoZoom is enabled.
+ * Respects user input: pauses during interaction and recovers slowly after.
  */
 function updateDynamicCamera() {
   if (!cameraConfig.autoZoom) return
+
+  // If user is actively controlling camera, skip auto-zoom entirely
+  if (userIsControllingCamera) return
+
+  // Calculate time since last user interaction
+  const timeSinceInteraction = (performance.now() - lastCameraInteractionTime) / 1000
+
+  // If within recovery delay, don't auto-zoom at all
+  if (timeSinceInteraction < cameraConfig.recoveryDelay) return
+
+  // Calculate effective smoothing: 
+  // - Start ultra-slow after recovery delay
+  // - Gradually increase to normal over additional time
+  const recoveryProgress = Math.min(1, (timeSinceInteraction - cameraConfig.recoveryDelay) / cameraConfig.recoveryDelay)
+  const effectiveSmoothing = cameraConfig.smoothing * THREE.MathUtils.lerp(
+    cameraConfig.recoverySmoothingMultiplier, // Start very slow
+    1.0, // Ramp up to normal
+    recoveryProgress * recoveryProgress // Quadratic ease-in for gentle start
+  )
 
   const bounds = calculateContentBounds()
   const center = new THREE.Vector3()
@@ -318,7 +382,7 @@ function updateDynamicCamera() {
   )
 
   // Smoothly move OrbitControls target
-  controls.target.lerp(targetPoint, cameraConfig.smoothing)
+  controls.target.lerp(targetPoint, effectiveSmoothing)
 
   // Current direction from target to camera (preserve user's orbit angle)
   const direction = new THREE.Vector3().subVectors(camera.position, controls.target).normalize()
@@ -326,8 +390,8 @@ function updateDynamicCamera() {
   // Desired camera position
   const desiredPos = new THREE.Vector3().copy(controls.target).addScaledVector(direction, idealDistance)
 
-  // Smoothly interpolate camera position
-  camera.position.lerp(desiredPos, cameraConfig.smoothing)
+  // Smoothly interpolate camera position (only zoom, preserve angle)
+  camera.position.lerp(desiredPos, effectiveSmoothing)
 }
 
 // --- Objects ---
@@ -402,13 +466,13 @@ wallShapes.forEach(spec => {
 
 // --- Logic Variables ---
 let selectedObject = null; // { mesh, body, initialMass }
+let selectionLight = null; // PointLight that follows selected block
 let interactionMode = 'move' // 'move' or 'rotate'
 let blockCount = 0;
 
 // --- UI Elements ---
 const ui = {
   container: document.getElementById('ui-container'),
-  hint: document.getElementById('controls-hint'),
   controls: document.getElementById('selected-controls'),
   btnSpawn: document.getElementById('btn-spawn'),
   btnDrop: document.getElementById('btn-drop'),
@@ -416,6 +480,261 @@ const ui = {
   rotBtns: document.querySelectorAll('.btn-rot'),
   score: document.getElementById('score-display'),
   indicator: document.getElementById('mode-indicator'),
+  // New level system UI
+  worldName: document.getElementById('world-name'),
+  levelDisplay: document.getElementById('level-display'),
+  linesDisplay: document.getElementById('lines-display'),
+  clearFeedback: document.getElementById('clear-feedback'),
+  clearText: document.getElementById('clear-text'),
+  gameOverOverlay: document.getElementById('game-over-overlay'),
+  gameOverTitle: document.getElementById('game-over-title'),
+  finalScore: document.getElementById('final-score'),
+  finalLevel: document.getElementById('final-level'),
+  finalLines: document.getElementById('final-lines'),
+  btnRestart: document.getElementById('btn-restart'),
+}
+
+// --- Game Manager Callbacks ---
+gameManager.onScoreChange = (score, target) => {
+  if (ui.score) ui.score.innerText = `Score: ${score}`
+}
+
+gameManager.onLevelChange = (level, world, worldName) => {
+  if (ui.levelDisplay) {
+    ui.levelDisplay.innerText = `Level ${level}`
+    ui.levelDisplay.classList.add('level-up')
+    setTimeout(() => ui.levelDisplay.classList.remove('level-up'), 500)
+  }
+  if (ui.worldName) ui.worldName.innerText = worldName
+}
+
+gameManager.onLinesChange = (lines) => {
+  if (ui.linesDisplay) ui.linesDisplay.innerText = `Lines: ${lines}`
+}
+
+gameManager.onLayerClear = ({ layers, score, totalLines }) => {
+  showClearFeedback(score, layers.length)
+  // Trigger visual effect for cleared layers
+  animateLayerClear(layers)
+}
+
+gameManager.onGameOver = ({ win, score, level }) => {
+  if (ui.gameOverOverlay) {
+    ui.gameOverOverlay.classList.remove('hidden')
+    if (ui.gameOverTitle) {
+      ui.gameOverTitle.innerText = win ? 'Victory!' : 'Game Over'
+      ui.gameOverTitle.className = win ? 'win' : ''
+    }
+    if (ui.finalScore) ui.finalScore.innerText = `Score: ${score}`
+    if (ui.finalLevel) ui.finalLevel.innerText = `Level: ${level}`
+    if (ui.finalLines) ui.finalLines.innerText = `Lines Cleared: ${gameManager.getLinesCleared()}`
+  }
+}
+
+// Connect spawn function to game manager
+gameManager.spawnBlockFn = () => spawnBlock()
+
+/**
+ * Show clear feedback animation
+ */
+function showClearFeedback(score, layerCount) {
+  if (!ui.clearFeedback || !ui.clearText) return
+  
+  ui.clearText.innerText = `+${score}`
+  ui.clearFeedback.classList.remove('hidden', 'multi-clear')
+  
+  if (layerCount > 1) {
+    ui.clearFeedback.classList.add('multi-clear')
+  }
+  
+  // Remove after animation
+  setTimeout(() => {
+    ui.clearFeedback.classList.add('hidden')
+  }, 1000)
+}
+
+/**
+ * Animate layer clear effect
+ */
+function animateLayerClear(layerYs) {
+  // Create flash effect at cleared layer heights
+  layerYs.forEach(gridY => {
+    const worldY = gridY + PLATE_HEIGHT + 0.5
+    
+    // Create a plane that flashes
+    const planeGeo = new THREE.PlaneGeometry(GRID_SIZE, GRID_SIZE)
+    const planeMat = new THREE.MeshBasicMaterial({
+      color: 0xffeb3b,
+      transparent: true,
+      opacity: 0.8,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    })
+    const plane = new THREE.Mesh(planeGeo, planeMat)
+    plane.rotation.x = -Math.PI / 2
+    plane.position.y = worldY
+    scene.add(plane)
+    
+    // Animate fade out
+    const startTime = performance.now()
+    const duration = 500
+    
+    function animatePlane() {
+      const elapsed = performance.now() - startTime
+      const progress = Math.min(1, elapsed / duration)
+      
+      plane.material.opacity = 0.8 * (1 - progress)
+      plane.scale.y = 1 + progress * 0.5
+      
+      if (progress < 1) {
+        requestAnimationFrame(animatePlane)
+      } else {
+        scene.remove(plane)
+        planeGeo.dispose()
+        planeMat.dispose()
+      }
+    }
+    animatePlane()
+  })
+}
+
+// Initialize game on load
+function initGame() {
+  gameManager.init(1)
+  
+  // Check for prefill on level start
+  const levelConfig = gameManager.getLevelConfig()
+  if (levelConfig && levelConfig.prefillPercent > 0) {
+    prefillBoard(levelConfig.prefillPercent, levelConfig.prefillHeight || 3)
+  }
+}
+
+/**
+ * Pre-fill the board with random blocks
+ * @param {number} fillPercent - Percentage of cells to fill (0-1)
+ * @param {number} maxHeight - Maximum height to fill up to (in grid units)
+ */
+function prefillBoard(fillPercent, maxHeight) {
+  const totalCells = GRID_SIZE * GRID_SIZE * maxHeight
+  const fillCount = Math.floor(totalCells * fillPercent)
+  
+  // Create set of all possible positions
+  const allPositions = []
+  for (let x = 0; x < GRID_SIZE; x++) {
+    for (let z = 0; z < GRID_SIZE; z++) {
+      for (let y = 0; y < maxHeight; y++) {
+        allPositions.push({ x, y, z })
+      }
+    }
+  }
+  
+  // Shuffle and pick fillCount positions
+  for (let i = allPositions.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[allPositions[i], allPositions[j]] = [allPositions[j], allPositions[i]]
+  }
+  
+  const fillPositions = allPositions.slice(0, fillCount)
+  
+  // Spawn cubes at selected positions
+  for (const pos of fillPositions) {
+    spawnPrefillCube(pos.x, pos.y, pos.z)
+  }
+}
+
+/**
+ * Spawn a single cube for prefill (already locked in place)
+ */
+function spawnPrefillCube(gridX, gridY, gridZ) {
+  const cubeSize = 1.0
+  const halfExtents = new CANNON.Vec3(0.49, 0.49, 0.49)
+  
+  // Convert grid to world position
+  const worldX = gridX - GRID_SIZE / 2 + 0.5
+  const worldY = gridY + PLATE_HEIGHT + 0.5
+  const worldZ = gridZ - GRID_SIZE / 2 + 0.5
+  
+  // Use consistent color based on cube count (1 cube = index 0)
+  let color
+  const paletteName = debugConfig.palette
+  const colorIndex = 0 // Single cube = first color in palette
+  
+  if (paletteName === 'Pastel' || !palettes[paletteName]) {
+    const hue = colorIndex / 8
+    color = new THREE.Color().setHSL(hue, 0.5, 0.6)
+  } else {
+    const colors = palettes[paletteName]
+    const hex = colors[colorIndex % colors.length]
+    color = new THREE.Color(hex)
+  }
+  
+  // Slightly desaturate prefill blocks to distinguish from player blocks
+  color.multiplyScalar(0.7)
+  
+  const material = new THREE.MeshStandardMaterial({
+    color: color,
+    emissive: color.clone().multiplyScalar(0.3),
+    metalness: 0.1,
+    roughness: 0.6,
+    flatShading: false
+  })
+  
+  // Create mesh
+  const visualSize = cubeSize * 1.02
+  const geometry = new RoundedBoxGeometry(visualSize, visualSize, visualSize, 4, 0.08)
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.castShadow = true
+  mesh.receiveShadow = true
+  
+  const group = new THREE.Group()
+  group.position.set(worldX, worldY, worldZ)
+  group.add(mesh)
+  
+  // Create static physics body
+  const body = new CANNON.Body({
+    mass: 0, // Static
+    type: CANNON.Body.STATIC,
+    position: new CANNON.Vec3(worldX, worldY, worldZ),
+    material: defaultMaterial
+  })
+  body.addShape(new CANNON.Box(halfExtents))
+  
+  // Generate block ID
+  const blockId = occupancyGrid.generateBlockId()
+  
+  group.userData = {
+    isBlock: true,
+    body: body,
+    blockId: blockId,
+    isPrefill: true,
+    refOffset: new CANNON.Vec3(0, 0, 0),
+    minOffset: new CANNON.Vec3(-0.5, -0.5, -0.5),
+    maxOffset: new CANNON.Vec3(0.5, 0.5, 0.5)
+  }
+  
+  createObject(group, body)
+  
+  // Register with occupancy grid
+  occupancyGrid.registerBlock(blockId, [{ x: worldX, y: worldY, z: worldZ }])
+}
+
+// Restart button handler
+if (ui.btnRestart) {
+  ui.btnRestart.addEventListener('click', () => {
+    if (ui.gameOverOverlay) ui.gameOverOverlay.classList.add('hidden')
+    
+    // Clear all blocks
+    while (objectsToUpdate.length > 0) {
+      const obj = objectsToUpdate.pop()
+      if (obj.mesh) scene.remove(obj.mesh)
+      if (obj.body) world.removeBody(obj.body)
+    }
+    
+    blockCount = 0
+    selectedObject = null
+    
+    initGame()
+  })
 }
 
 // Visual Helpers
@@ -427,132 +746,176 @@ boxHelper.visible = false
 const gizmoGroup = new THREE.Group()
 scene.add(gizmoGroup)
 
-function createRotationGizmo(axis, color, radius = 1.2) {
-  const group = new THREE.Group()
-
-  // 1. Axis Line (Infinite-ish or just long enough?)
-  // Let's make it go through the block
-  const lineGeo = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3().copy(axis).multiplyScalar(-3),
-    new THREE.Vector3().copy(axis).multiplyScalar(3)
-  ])
-  const lineMat = new THREE.LineBasicMaterial({ color: color, depthTest: false, transparent: true, opacity: 0.5 })
-  const line = new THREE.Line(lineGeo, lineMat)
-  group.add(line)
-
-  // 2. Curved Arrow (Torus Segment)
-  // We need to orient a Torus to match the rotation plane (perpendicular to axis)
-  const torusRadius = radius
-  const tubeRadius = 0.05
-  const arc = Math.PI * 1.5 // 270 degrees arc
-  const torusGeo = new THREE.TorusGeometry(torusRadius, tubeRadius, 8, 32, arc)
-  const torusMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false, toneMapped: false }) // Emissive-ish
-  const torus = new THREE.Mesh(torusGeo, torusMat)
-
-  // Rotate Torus to align with Axis
-  // Torus default is in XY plane (Z-axis is normal). 
-  // If axis is X (1,0,0) -> Rotate 90 around Y
-  // If axis is Y (0,1,0) -> Rotate 90 around X
-  // If axis is Z (0,0,1) -> Default
-
-  if (axis.x === 1) torus.rotation.y = Math.PI / 2
-  else if (axis.y === 1) torus.rotation.x = Math.PI / 2
-
-  group.add(torus)
-
-  // 3. Arrow Head (Cone)
-  const coneGeo = new THREE.ConeGeometry(0.15, 0.4, 16)
-  const coneMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false, toneMapped: false })
-  const cone = new THREE.Mesh(coneGeo, coneMat)
-
-  // Position cone at end of arc
-  // Math is tricky based on orientation, simplified:
-  // Just hardcode for X/Y/Z variants or generic math
-  // For now, let's just make 3 distinct helper functions or config objects to keep it simple and robust
-  // Actually, generic math:
-  // Point on circle in plane perpendicular to `axis`
-
-  // Let's keep it simple with explicit gizmo creation:
-  return { group, line, torus, cone }
-}
-
 // Pre-build the 3 gizmos
-const gizmoX = createGizmo('x', 0xff0000)
-const gizmoY = createGizmo('y', 0x00ff00)
-const gizmoZ = createGizmo('z', 0x0088ff)
-gizmoGroup.add(gizmoX)
-gizmoGroup.add(gizmoY)
-gizmoGroup.add(gizmoZ)
+const gizmoX = createStylishGizmo('x', 0xff3366) // Vibrant magenta-red
+const gizmoY = createStylishGizmo('y', 0x33ff66) // Vibrant lime-green  
+const gizmoZ = createStylishGizmo('z', 0x3366ff) // Vibrant electric blue
+gizmoGroup.add(gizmoX.group)
+gizmoGroup.add(gizmoY.group)
+gizmoGroup.add(gizmoZ.group)
 gizmoGroup.visible = false
 
-function createGizmo(type, colorHex) {
+// Store references for animation
+const gizmoRefs = { x: gizmoX, y: gizmoY, z: gizmoZ }
+
+function createStylishGizmo(type, colorHex) {
   const wrapper = new THREE.Group()
   const color = new THREE.Color(colorHex)
-
-  // Axis Line
-  const pts = []
-  if (type === 'x') pts.push(new THREE.Vector3(-3, 0, 0), new THREE.Vector3(3, 0, 0))
-  if (type === 'y') pts.push(new THREE.Vector3(0, -3, 0), new THREE.Vector3(0, 3, 0))
-  if (type === 'z') pts.push(new THREE.Vector3(0, 0, -3), new THREE.Vector3(0, 0, 3))
-
-  const line = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints(pts),
-    new THREE.LineBasicMaterial({ color: color, depthTest: false, transparent: true, opacity: 0.6 })
-  )
-  wrapper.add(line)
-
-  // Spin Ring (Torus)
-  const torus = new THREE.Mesh(
-    new THREE.TorusGeometry(1.5, 0.05, 8, 48, Math.PI * 1.5),
-    new THREE.MeshBasicMaterial({ color: color, depthTest: false, toneMapped: false })
-  )
-  if (type === 'x') torus.rotation.y = Math.PI / 2
-  if (type === 'y') torus.rotation.x = Math.PI / 2
-  // Z is default
-  wrapper.add(torus)
-
-  // Arrow Tip
-  const cone = new THREE.Mesh(
-    new THREE.ConeGeometry(0.15, 0.3, 12),
-    new THREE.MeshBasicMaterial({ color: color, depthTest: false, toneMapped: false })
-  )
-
-  // Position the tip at the end of the arc
-  // Arc is 1.5 PI (270 deg). Starts at right (0) goes CCW.
-  // End is at 270 deg = -90 deg = Bottom.
-  // We need to match the torus rotation.
-
-  // Manual positioning is safer for clarity:
+  const glowColor = color.clone().multiplyScalar(1.5) // Brighter for glow
+  
+  const axisLength = 2.5
+  const ringRadius = 1.8
+  const tubeRadius = 0.06
+  
+  // === 1. GLOWING AXIS LINE with cylinder + spherical caps ===
+  
+  // Main axis cylinder (thick glowing rod)
+  const axisCylinderGeo = new THREE.CylinderGeometry(0.04, 0.04, axisLength * 2, 16)
+  const axisMat = new THREE.MeshBasicMaterial({ 
+    color: color, 
+    transparent: true, 
+    opacity: 0.9,
+    depthTest: false,
+    toneMapped: false
+  })
+  const axisCylinder = new THREE.Mesh(axisCylinderGeo, axisMat)
+  
+  // Outer glow cylinder (larger, more transparent)
+  const axisGlowGeo = new THREE.CylinderGeometry(0.12, 0.12, axisLength * 2, 16)
+  const axisGlowMat = new THREE.MeshBasicMaterial({ 
+    color: glowColor, 
+    transparent: true, 
+    opacity: 0.25,
+    depthTest: false,
+    toneMapped: false
+  })
+  const axisGlow = new THREE.Mesh(axisGlowGeo, axisGlowMat)
+  
+  // Spherical end caps
+  const capGeo = new THREE.SphereGeometry(0.12, 16, 16)
+  const capMat = new THREE.MeshBasicMaterial({ 
+    color: glowColor, 
+    transparent: true, 
+    opacity: 0.95,
+    depthTest: false,
+    toneMapped: false
+  })
+  const cap1 = new THREE.Mesh(capGeo, capMat)
+  const cap2 = new THREE.Mesh(capGeo, capMat.clone())
+  
+  // Orient axis based on type
   if (type === 'x') {
-    // Ring in YZ plane. 
-    // 0 angle is +X (local). Wait torus in YZ plane means 0 is... ?
-    // Torus default (XY): starts at (R,0,0). Arc 270 deg -> (0, -R, 0).
-    // Rotated Y=90: X became Z. Y stayed Y.
-    // It's confusing. Let's just place it visually.
-
-    // Let's assume simpler: just static meshes hardcoded.
-    cone.position.set(0, -1.5, 0) // Bottom of ring
-    cone.rotation.z = Math.PI // Pointing down/left tangent
-    cone.rotation.x = -Math.PI / 2 // Align with trace
+    axisCylinder.rotation.z = Math.PI / 2
+    axisGlow.rotation.z = Math.PI / 2
+    cap1.position.set(-axisLength, 0, 0)
+    cap2.position.set(axisLength, 0, 0)
+  } else if (type === 'y') {
+    // Y is default cylinder orientation (vertical)
+    cap1.position.set(0, -axisLength, 0)
+    cap2.position.set(0, axisLength, 0)
+  } else { // z
+    axisCylinder.rotation.x = Math.PI / 2
+    axisGlow.rotation.x = Math.PI / 2
+    cap1.position.set(0, 0, -axisLength)
+    cap2.position.set(0, 0, axisLength)
   }
-  if (type === 'y') {
-    // Ring in XZ plane (Rot X=90).
-    // Default XY -> RotX -> XZ.
-    // Start (R,0,0) -> End (0,-R,0) -> (0,0,R) in XZ?
-    cone.position.set(0, 0, 1.5)
-    cone.rotation.x = Math.PI / 2
+  
+  wrapper.add(axisCylinder)
+  wrapper.add(axisGlow)
+  wrapper.add(cap1)
+  wrapper.add(cap2)
+  
+  // === 2. ANIMATED CIRCULAR ARROW (Torus arc with gradient effect) ===
+  
+  // Main ring arc (270 degrees)
+  const arcAngle = Math.PI * 1.6 // Slightly more than 270 deg for visual appeal
+  const torusGeo = new THREE.TorusGeometry(ringRadius, tubeRadius, 12, 64, arcAngle)
+  const torusMat = new THREE.MeshBasicMaterial({ 
+    color: color, 
+    depthTest: false, 
+    toneMapped: false,
+    transparent: true,
+    opacity: 0.95
+  })
+  const torus = new THREE.Mesh(torusGeo, torusMat)
+  
+  // Outer glow ring
+  const torusGlowGeo = new THREE.TorusGeometry(ringRadius, tubeRadius * 2.5, 8, 48, arcAngle)
+  const torusGlowMat = new THREE.MeshBasicMaterial({ 
+    color: glowColor, 
+    depthTest: false, 
+    toneMapped: false,
+    transparent: true,
+    opacity: 0.2
+  })
+  const torusGlow = new THREE.Mesh(torusGlowGeo, torusGlowMat)
+  
+  // Orient ring perpendicular to axis
+  if (type === 'x') {
+    torus.rotation.y = Math.PI / 2
+    torusGlow.rotation.y = Math.PI / 2
+  } else if (type === 'y') {
+    torus.rotation.x = Math.PI / 2
+    torusGlow.rotation.x = Math.PI / 2
   }
-  if (type === 'z') {
-    // Ring in XY plane.
-    cone.position.set(0, -1.5, 0)
-    cone.rotation.z = Math.PI
+  // Z is default (XY plane)
+  
+  wrapper.add(torus)
+  wrapper.add(torusGlow)
+  
+  // === 3. SPINNING INDICATOR (Small orbiting dot) ===
+  const dotGeo = new THREE.SphereGeometry(0.08, 12, 12)
+  const dotMat = new THREE.MeshBasicMaterial({ 
+    color: 0xffffff, 
+    depthTest: false, 
+    toneMapped: false
+  })
+  const spinDot = new THREE.Mesh(dotGeo, dotMat)
+  
+  // Dot glow
+  const dotGlowGeo = new THREE.SphereGeometry(0.16, 8, 8)
+  const dotGlowMat = new THREE.MeshBasicMaterial({ 
+    color: glowColor, 
+    depthTest: false, 
+    toneMapped: false,
+    transparent: true,
+    opacity: 0.5
+  })
+  const spinDotGlow = new THREE.Mesh(dotGlowGeo, dotGlowMat)
+  
+  // Group the spinning elements for animation
+  const spinGroup = new THREE.Group()
+  spinGroup.add(spinDot)
+  spinGroup.add(spinDotGlow)
+  
+  // Position initial dot on the ring
+  if (type === 'x') {
+    spinDot.position.set(0, ringRadius, 0)
+    spinDotGlow.position.set(0, ringRadius, 0)
+  } else if (type === 'y') {
+    spinDot.position.set(ringRadius, 0, 0)
+    spinDotGlow.position.set(ringRadius, 0, 0)
+  } else {
+    spinDot.position.set(ringRadius, 0, 0)
+    spinDotGlow.position.set(ringRadius, 0, 0)
   }
-
-  wrapper.add(cone)
-  return wrapper
+  
+  wrapper.add(spinGroup)
+  
+  return { 
+    group: wrapper, 
+    spinGroup, 
+    torus, 
+    torusGlow,
+    type,
+    ringRadius
+  }
 }
 
-function updateGizmos() {
+// Gizmo animation state
+let gizmoAnimationTime = 0
+
+function updateGizmos(deltaTime = 0) {
   if (!selectedObject) {
     gizmoGroup.visible = false
     return
@@ -562,20 +925,216 @@ function updateGizmos() {
   gizmoGroup.visible = true
 
   // Show only active axis
-  gizmoX.visible = (interactionMode === 'rotate-x')
-  gizmoY.visible = (interactionMode === 'rotate-y')
-  gizmoZ.visible = (interactionMode === 'rotate-z')
+  gizmoRefs.x.group.visible = (interactionMode === 'rotate-x')
+  gizmoRefs.y.group.visible = (interactionMode === 'rotate-y')
+  gizmoRefs.z.group.visible = (interactionMode === 'rotate-z')
 
-  // If just 'move', hide all? or user wanted move separate.
+  // If just 'move', hide all
   if (interactionMode === 'move') gizmoGroup.visible = false
+  
+  // Animate the spinning indicator on active gizmo
+  if (gizmoGroup.visible && deltaTime > 0) {
+    gizmoAnimationTime += deltaTime
+    const spinSpeed = 1.5 // Rotations per second
+    const angle = gizmoAnimationTime * spinSpeed * Math.PI * 2
+    
+    // Animate the active gizmo's spin group
+    let activeGizmo = null
+    if (interactionMode === 'rotate-x') activeGizmo = gizmoRefs.x
+    else if (interactionMode === 'rotate-y') activeGizmo = gizmoRefs.y
+    else if (interactionMode === 'rotate-z') activeGizmo = gizmoRefs.z
+    
+    if (activeGizmo) {
+      const r = activeGizmo.ringRadius
+      
+      // Update spinning dot position based on axis type
+      if (activeGizmo.type === 'x') {
+        // Rotate in YZ plane
+        activeGizmo.spinGroup.children.forEach(child => {
+          child.position.set(0, r * Math.cos(angle), r * Math.sin(angle))
+        })
+      } else if (activeGizmo.type === 'y') {
+        // Rotate in XZ plane
+        activeGizmo.spinGroup.children.forEach(child => {
+          child.position.set(r * Math.cos(angle), 0, r * Math.sin(angle))
+        })
+      } else { // z
+        // Rotate in XY plane
+        activeGizmo.spinGroup.children.forEach(child => {
+          child.position.set(r * Math.cos(angle), r * Math.sin(angle), 0)
+        })
+      }
+      
+      // Pulse the glow intensity subtly
+      const pulse = 0.15 + 0.1 * Math.sin(angle * 2)
+      if (activeGizmo.torusGlow && activeGizmo.torusGlow.material) {
+        activeGizmo.torusGlow.material.opacity = pulse
+      }
+    }
+  }
 }
 
 // --- Functions ---
 
 function spawnBlock() {
-  spawnPolyomino(new THREE.Vector3(0.5, 10, 0.5)) // Center of Grid Cell
+  // Check game over before spawning
+  if (gameManager.isGameOver()) return
+  
+  // Get shape from level system
+  const shapeData = gameManager.getNextShape()
+  console.log('Spawning shape:', shapeData)
+  
+  const { id: shapeId, coords: shapeCoords } = shapeData
+  
+  if (shapeCoords && shapeCoords.length > 0) {
+    console.log(`Using predefined shape: ${shapeId} with ${shapeCoords.length} cubes`)
+    spawnPredefinedShape(new THREE.Vector3(0.5, 10, 0.5), shapeCoords, shapeId)
+  } else {
+    // Fallback to random generation
+    console.log('Fallback to random polyomino - shapeCoords:', shapeCoords)
+    spawnPolyomino(new THREE.Vector3(0.5, 10, 0.5))
+  }
+  
   blockCount++
-  if (ui.score) ui.score.innerText = `Blocks: ${blockCount}`
+}
+
+/**
+ * Spawn a block using predefined shape coordinates
+ */
+function spawnPredefinedShape(position, shapeCoords, shapeId) {
+  const numCubes = shapeCoords.length
+  const cubeSize = 1.0
+  const halfExtents = new CANNON.Vec3(0.49, 0.49, 0.49)
+
+  // Determine Color based on cube count
+  let color
+  const paletteName = debugConfig.palette
+  const colorIndex = Math.min(numCubes - 1, 7)
+  
+  if (paletteName === 'Pastel' || !palettes[paletteName]) {
+    const hue = colorIndex / 8
+    const saturation = 0.5
+    const lightness = 0.6
+    color = new THREE.Color().setHSL(hue, saturation, lightness)
+  } else {
+    const colors = palettes[paletteName]
+    const hex = colors[colorIndex % colors.length]
+    color = new THREE.Color(hex)
+  }
+
+  const material = new THREE.MeshStandardMaterial({
+    color: color,
+    emissive: color,
+    metalness: 0.1,
+    roughness: 0.5,
+    flatShading: false
+  })
+
+  // Normalize coordinates (center on centroid)
+  const coords = normalizeShape(shapeCoords)
+
+  // Centroid is now at origin after normalization
+  const centroid = { x: 0, y: 0, z: 0 }
+
+  const group = new THREE.Group()
+  group.position.copy(position)
+
+  const mass = numCubes * 1.0
+  const body = new CANNON.Body({
+    mass: mass,
+    position: new CANNON.Vec3(position.x, position.y, position.z),
+    material: defaultMaterial,
+    linearDamping: 0.01,
+    angularDamping: 0.1,
+    fixedRotation: true
+  })
+  body.angularFactor.set(0, 0, 0)
+  body.linearFactor.set(1, 1, 1)
+
+  // Generate unique block ID for occupancy tracking
+  const blockId = occupancyGrid.generateBlockId()
+  
+  // Use CSG union to merge rounded boxes
+  const visualSize = cubeSize * 1.05
+  const roundedBoxGeometry = new RoundedBoxGeometry(visualSize, visualSize, visualSize, 4, 0.08)
+  const csgEvaluator = new Evaluator()
+  
+  let resultBrush = null
+  
+  coords.forEach(c => {
+    const lx = c.x * cubeSize
+    const ly = c.y * cubeSize
+    const lz = c.z * cubeSize
+
+    const offset = new CANNON.Vec3(lx, ly, lz)
+    body.addShape(new CANNON.Box(halfExtents), offset)
+
+    const brush = new Brush(roundedBoxGeometry)
+    brush.position.set(lx, ly, lz)
+    brush.updateMatrixWorld()
+    
+    if (resultBrush === null) {
+      resultBrush = brush
+    } else {
+      resultBrush = csgEvaluator.evaluate(resultBrush, brush, ADDITION)
+    }
+  })
+  
+  const finalGeometry = resultBrush.geometry
+  finalGeometry.computeVertexNormals()
+  
+  const mesh = new THREE.Mesh(finalGeometry, material)
+  mesh.castShadow = true
+  mesh.receiveShadow = true
+  group.add(mesh)
+
+  // Calculate Local AABB for Clamping
+  let minX = Infinity, minY = Infinity, minZ = Infinity
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
+
+  coords.forEach(c => {
+    const localX = c.x * cubeSize
+    const localY = c.y * cubeSize
+    const localZ = c.z * cubeSize
+
+    const he = cubeSize * 0.5
+    minX = Math.min(minX, localX - he)
+    minY = Math.min(minY, localY - he)
+    minZ = Math.min(minZ, localZ - he)
+    maxX = Math.max(maxX, localX + he)
+    maxY = Math.max(maxY, localY + he)
+    maxZ = Math.max(maxZ, localZ + he)
+  })
+
+  const minOffset = new CANNON.Vec3(minX, minY, minZ)
+  const maxOffset = new CANNON.Vec3(maxX, maxY, maxZ)
+
+  // Reference Offset for Snapping (use first cube)
+  const refC = coords[0]
+  const refX = refC.x * cubeSize
+  const refY = refC.y * cubeSize
+  const refZ = refC.z * cubeSize
+  const refOffset = new CANNON.Vec3(refX, refY, refZ)
+
+  // Store shape info for later use
+  group.userData = { 
+    isBlock: true, 
+    body: body, 
+    refOffset: refOffset, 
+    minOffset, 
+    maxOffset,
+    blockId,
+    shapeId,
+    cubeCount: numCubes,
+    localCoords: coords // Store for occupancy grid
+  }
+  
+  createObject(group, body)
+
+  // Initial Snap
+  const snappedPos = getSnappedPosition(body.position, body.quaternion, refOffset)
+  body.position.copy(snappedPos)
+  group.position.copy(snappedPos)
 }
 
 
@@ -585,19 +1144,21 @@ function spawnPolyomino(position) {
   // Slightly shrink collider to prevent edge-friction/jamming (0.49 instead of 0.5)
   const halfExtents = new CANNON.Vec3(0.49, 0.49, 0.49)
 
-  // Determine Color
+  // Determine Color based on cube count (same color for same size blocks)
   let color
   const paletteName = debugConfig.palette
+  const colorIndex = numCubes - 1 // 1 cube → index 0, 2 cubes → index 1, etc.
+  
   if (paletteName === 'Pastel' || !palettes[paletteName]) {
-    // Existing Natural HSL Logic
-    const hue = Math.random()
-    const saturation = 0.4 + Math.random() * 0.2 // 40-60%
-    const lightness = 0.5 + Math.random() * 0.2  // 50-70%
+    // Distribute hues evenly across 8 cube sizes
+    const hue = colorIndex / 8
+    const saturation = 0.5
+    const lightness = 0.6
     color = new THREE.Color().setHSL(hue, saturation, lightness)
   } else {
-    // Pick random from preset
+    // Pick color from palette based on cube count
     const colors = palettes[paletteName]
-    const hex = colors[Math.floor(Math.random() * colors.length)]
+    const hex = colors[colorIndex % colors.length]
     color = new THREE.Color(hex)
   }
 
@@ -609,15 +1170,24 @@ function spawnPolyomino(position) {
     flatShading: false // Ensure smooth shading
   })
 
-  // Generate Coords
+  // Generate Coords based on block mode
   const coords = [{ x: 0, y: 0, z: 0 }]
+  
+  // 2D mode: only X and Z directions (flat polyominoes)
+  // 3D mode: all 6 directions (polycubes)
+  const dirs = debugConfig.blockMode === '2D' 
+    ? [
+        { x: 1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 },
+        { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 }
+      ]
+    : [
+        { x: 1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 },
+        { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 },
+        { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 }
+      ]
+  
   while (coords.length < numCubes) {
     const parent = coords[Math.floor(Math.random() * coords.length)]
-    const dirs = [
-      { x: 1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 },
-      { x: 0, y: 1, z: 0 }, { x: 0, y: -1, z: 0 },
-      { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 }
-    ]
     const dir = dirs[Math.floor(Math.random() * dirs.length)]
     const newCoord = { x: parent.x + dir.x, y: parent.y + dir.y, z: parent.z + dir.z }
     if (!coords.some(c => c.x === newCoord.x && c.y === newCoord.y && c.z === newCoord.z)) {
@@ -647,10 +1217,15 @@ function spawnPolyomino(position) {
   body.linearFactor.set(1, 1, 1)
 
 
-  // Create Individual Cube Geometries (Voxel Look)
-  const geometry = new RoundedBoxGeometry(cubeSize, cubeSize, cubeSize, 4, 0.05)
-  //const geometry = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize) // Fallback if rounded too slow
-
+  // Use CSG union to merge rounded boxes - removes interior faces while keeping rounded edges
+  // Make visual geometry slightly larger than grid spacing so adjacent cells overlap for proper CSG merge
+  const visualSize = cubeSize * 1.05
+  const roundedBoxGeometry = new RoundedBoxGeometry(visualSize, visualSize, visualSize, 4, 0.08)
+  const csgEvaluator = new Evaluator()
+  
+  // Create brushes for each cell and union them together
+  let resultBrush = null
+  
   coords.forEach(c => {
     const lx = (c.x - centroid.x) * cubeSize
     const ly = (c.y - centroid.y) * cubeSize
@@ -660,16 +1235,27 @@ function spawnPolyomino(position) {
     const offset = new CANNON.Vec3(lx, ly, lz)
     body.addShape(new CANNON.Box(halfExtents), offset)
 
-    // Visual Mesh
-    const mesh = new THREE.Mesh(geometry, material)
-    mesh.position.set(lx, ly, lz)
-    mesh.castShadow = true
-    mesh.receiveShadow = true
-
-    // Slight random rotation for "imperfect" organic look? No, keep aligned for stacking.
-
-    group.add(mesh)
+    // Create a brush for this cell
+    const brush = new Brush(roundedBoxGeometry)
+    brush.position.set(lx, ly, lz)
+    brush.updateMatrixWorld()
+    
+    if (resultBrush === null) {
+      resultBrush = brush
+    } else {
+      // Union this brush with the accumulated result
+      resultBrush = csgEvaluator.evaluate(resultBrush, brush, ADDITION)
+    }
   })
+  
+  // Create final mesh from the CSG result
+  const finalGeometry = resultBrush.geometry
+  finalGeometry.computeVertexNormals() // Ensure smooth normals
+  
+  const mesh = new THREE.Mesh(finalGeometry, material)
+  mesh.castShadow = true
+  mesh.receiveShadow = true
+  group.add(mesh)
 
   // Calculate Local AABB for Clamping
   let minX = Infinity, minY = Infinity, minZ = Infinity
@@ -783,13 +1369,14 @@ function getClampedPosition(targetPos, quaternion, minOffset, maxOffset) {
 
 function updateUI() {
   if (selectedObject) {
-    ui.hint.classList.add('hidden')
     ui.controls.classList.remove('hidden')
   } else {
-    ui.hint.classList.remove('hidden')
     ui.controls.classList.add('hidden')
   }
 }
+
+// Outline mesh for selection highlight
+let outlineMesh = null
 
 function toggleSelection(meshGroup) {
   if (selectedObject && selectedObject.mesh === meshGroup) {
@@ -801,53 +1388,66 @@ function toggleSelection(meshGroup) {
   const objData = objectsToUpdate.find(o => o.mesh === meshGroup)
   if (!objData) return
 
-  // Store original material & Swap to Glass
-  const meshes = []
-
-  // Create ONE glass material for the whole group (since they are one object logically)
-  // We grab the color from the first child to define the tint
+  // Get the block color
   let leadColor = 0xffffff
   meshGroup.traverse(child => {
     if (child.isMesh && leadColor === 0xffffff) leadColor = child.material.color.getHex()
   })
 
-  // Glass Material
-  const glassMaterial = new THREE.MeshPhysicalMaterial({
-    color: leadColor,
-    emissive: leadColor,
-    emissiveIntensity: debugConfig.emissiveIntensity,
-    metalness: debugConfig.metalness,
-    roughness: debugConfig.roughness,
-    transmission: debugConfig.transmission, // Glass!
-    thickness: debugConfig.thickness, // Volume
-    transparent: true,
-    opacity: debugConfig.opacity, // Transmission handles the see-through
-    depthWrite: debugConfig.depthWrite,
-    side: THREE.DoubleSide, // Render back faces for "volume" feel
-    attenuationColor: leadColor, // Absorb color as light travels through
-    attenuationDistance: 2.0 // Distance for color absorption (tuning needed)
-  })
-
+  // Store original materials (no swap needed, just for reference)
+  const meshes = []
   meshGroup.traverse(child => {
     if (child.isMesh) {
       meshes.push({
         mesh: child,
-        originalMaterial: child.material // Store the whole material instance
+        originalMaterial: child.material
       })
-      child.material = glassMaterial
-      child.castShadow = true // Natural shadows requested
-      child.receiveShadow = true
     }
   })
+
+  // Create glowing outline mesh
+  const outlineColor = new THREE.Color(leadColor).multiplyScalar(1.5) // Brighter
+  const outlineMaterial = new THREE.MeshBasicMaterial({
+    color: outlineColor,
+    side: THREE.BackSide, // Render inside faces only (creates outline effect)
+    transparent: true,
+    opacity: 0.8,
+    depthTest: true,
+  })
+
+  // Clone the mesh group for outline
+  outlineMesh = new THREE.Group()
+  meshGroup.traverse(child => {
+    if (child.isMesh) {
+      const outlineChild = new THREE.Mesh(child.geometry.clone(), outlineMaterial)
+      outlineChild.scale.setScalar(1.08) // Scale up slightly for outline thickness
+      outlineChild.position.copy(child.position)
+      outlineChild.rotation.copy(child.rotation)
+      outlineMesh.add(outlineChild)
+    }
+  })
+  
+  outlineMesh.position.copy(meshGroup.position)
+  outlineMesh.quaternion.copy(meshGroup.quaternion)
+  scene.add(outlineMesh)
 
   selectedObject = {
     mesh: meshGroup,
     body: objData.body,
-    originalMass: 1.0, // Always 1.0 for active
+    originalMass: 1.0,
     userData: meshGroup.userData,
     targetPosition: new CANNON.Vec3().copy(objData.body.position),
-    materialCache: meshes
+    materialCache: meshes,
+    outlineColor: leadColor
   }
+
+  // Create PointLight to make block emit actual light
+  if (selectionLight) {
+    scene.remove(selectionLight)
+  }
+  selectionLight = new THREE.PointLight(leadColor, debugConfig.selectionLightIntensity, 0, 0)
+  selectionLight.position.copy(meshGroup.position)
+  scene.add(selectionLight)
 
   // WAKE UP!
   selectedObject.body.type = CANNON.Body.DYNAMIC
@@ -856,7 +1456,6 @@ function toggleSelection(meshGroup) {
   selectedObject.body.wakeUp() // Ensure it's ready to move
 
   interactionMode = 'move' // Default start mode
-  if (ui.hint) ui.hint.innerText = `Mode: MOVE`
   if (ui.indicator) {
     ui.indicator.innerText = "✥"
     ui.indicator.classList.remove('hidden')
@@ -874,13 +1473,22 @@ function toggleSelection(meshGroup) {
 function deselect() {
   if (!selectedObject) return
 
-  // Restore Original Material
-  if (selectedObject.materialCache) {
-    selectedObject.materialCache.forEach(data => {
-      data.mesh.material = data.originalMaterial
-      data.mesh.castShadow = true
-      data.mesh.receiveShadow = true
+  // Remove selection light
+  if (selectionLight) {
+    scene.remove(selectionLight)
+    selectionLight = null
+  }
+
+  // Remove outline mesh
+  if (outlineMesh) {
+    scene.remove(outlineMesh)
+    outlineMesh.traverse(child => {
+      if (child.isMesh) {
+        child.geometry.dispose()
+        child.material.dispose()
+      }
     })
+    outlineMesh = null
   }
 
   // Remove Ghost
@@ -911,12 +1519,199 @@ function deselect() {
   selectedObject.body.velocity.set(0, 0, 0)
   selectedObject.body.angularVelocity.set(0, 0, 0)
 
+  // --- Register with Occupancy Grid ---
+  const blockId = selectedObject.userData.blockId
+  if (blockId) {
+    // Calculate world positions of each cube
+    const worldPositions = getBlockWorldPositions(selectedObject.body, currentRot)
+    console.log('=== BLOCK LANDING ===')
+    console.log('Block ID:', blockId)
+    console.log('World positions:', worldPositions)
+    
+    // Convert to grid coords for debugging
+    worldPositions.forEach((pos, i) => {
+      const gridCoord = occupancyGrid.worldToGrid(pos.x, pos.y, pos.z)
+      console.log(`  Cube ${i}: world(${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)}) -> grid`, gridCoord)
+    })
+    
+    occupancyGrid.registerBlock(blockId, worldPositions)
+    
+    // Debug: print grid stats
+    const stats = occupancyGrid.getStats()
+    console.log('Grid stats:', stats)
+    
+    // Debug: print layer 0 (bottom layer)
+    console.log('=== LAYER 0 STATUS ===')
+    occupancyGrid.debugPrintLayer(0)
+    
+    // Count filled cells in layer 0
+    let filledInLayer0 = 0
+    for (let x = 0; x < GRID_SIZE; x++) {
+      for (let z = 0; z < GRID_SIZE; z++) {
+        if (occupancyGrid.getCell(x, 0, z)) {
+          filledInLayer0++
+        }
+      }
+    }
+    console.log(`Layer 0: ${filledInLayer0} / ${GRID_SIZE * GRID_SIZE} cells filled`)
+    
+    // Check for complete layers
+    const completeLayers = occupancyGrid.getCompleteLayers()
+    console.log('Complete layers:', completeLayers)
+    
+    if (completeLayers.length > 0) {
+      console.log('*** CLEARING LAYERS! ***')
+      handleLayerClear(completeLayers)
+    }
+  }
+
   if (ui.indicator) ui.indicator.classList.add('hidden')
 
   // Clean up references
   selectedObject = null
   updateUI()
   updateGizmos()
+}
+
+/**
+ * Get world positions of all cubes in a block
+ * Snaps positions to grid centers for accurate occupancy tracking
+ */
+function getBlockWorldPositions(body, quaternion) {
+  const positions = []
+  const bodyPos = body.position
+
+  for (let i = 0; i < body.shapes.length; i++) {
+    const offset = body.shapeOffsets[i]
+    const rotatedOffset = new CANNON.Vec3()
+    quaternion.vmult(offset, rotatedOffset)
+    
+    // Calculate raw world position
+    let worldX = bodyPos.x + rotatedOffset.x
+    let worldY = bodyPos.y + rotatedOffset.y
+    let worldZ = bodyPos.z + rotatedOffset.z
+    
+    // Snap X and Z to grid centers (X.5 in world space)
+    worldX = Math.round(worldX - 0.5) + 0.5
+    worldZ = Math.round(worldZ - 0.5) + 0.5
+    
+    // Snap Y to grid levels (first layer at Y=1.0, each layer +1.0)
+    // Grid Y = floor(worldY - PLATE_HEIGHT), so worldY = gridY + PLATE_HEIGHT + 0.5
+    // Snap to nearest: round(worldY - PLATE_HEIGHT - 0.5) + PLATE_HEIGHT + 0.5
+    worldY = Math.round(worldY - PLATE_HEIGHT - 0.5) + PLATE_HEIGHT + 0.5
+    
+    positions.push({ x: worldX, y: worldY, z: worldZ })
+  }
+
+  return positions
+}
+
+/**
+ * Handle layer clearing - remove cubes, split blocks, drop above
+ */
+function handleLayerClear(layerYs) {
+  console.log('=== LAYER CLEAR START ===')
+  console.log('Clearing layers:', layerYs)
+  console.log('Grid before clear:')
+  occupancyGrid.debugPrintLayer(0)
+  
+  // Get affected blocks before clearing
+  const affectedBlockIds = new Set()
+  for (const y of layerYs) {
+    const blocksInLayer = occupancyGrid.getBlocksInLayer(y)
+    blocksInLayer.forEach(id => affectedBlockIds.add(id))
+  }
+
+  // Store block info before clearing
+  const blockInfoMap = new Map()
+  for (const blockId of affectedBlockIds) {
+    const remainingCells = occupancyGrid.getBlockCellsNotInLayers(blockId, layerYs)
+    const components = occupancyGrid.findConnectedComponents(remainingCells)
+    blockInfoMap.set(blockId, {
+      remainingCells,
+      components,
+      needsSplit: components.length > 1,
+      fullyCleared: remainingCells.length === 0
+    })
+  }
+
+  // Clear the layers in grid
+  occupancyGrid.clearLayers(layerYs)
+  occupancyGrid.dropCellsAbove(layerYs)
+  
+  console.log('Grid after clear:')
+  occupancyGrid.debugPrintLayer(0)
+  console.log('Grid stats after clear:', occupancyGrid.getStats())
+  console.log('=== LAYER CLEAR END ===')
+
+  // Calculate and add score
+  const score = gameManager.state ? 
+    (100 * layerYs.length * (layerYs.length === 1 ? 1 : layerYs.length === 2 ? 3 : layerYs.length === 3 ? 6 : 10)) : 0
+  
+  if (gameManager.state) {
+    gameManager.addScore(score)
+    gameManager.state.linesCleared += layerYs.length
+    gameManager.notifyLinesChange()
+  }
+
+  // Show feedback
+  showClearFeedback(score, layerYs.length)
+  animateLayerClear(layerYs)
+
+  // Process visual updates for affected blocks
+  processBlockUpdatesAfterClear(blockInfoMap, layerYs)
+}
+
+/**
+ * Process visual block updates after layer clear
+ */
+function processBlockUpdatesAfterClear(blockInfoMap, clearedLayers) {
+  const dropAmount = clearedLayers.length
+  
+  for (const [blockId, info] of blockInfoMap) {
+    // Find the object in our list
+    const objIndex = objectsToUpdate.findIndex(o => o.mesh?.userData?.blockId === blockId)
+    if (objIndex === -1) continue
+    
+    const obj = objectsToUpdate[objIndex]
+    
+    if (info.fullyCleared) {
+      // Remove the entire block
+      scene.remove(obj.mesh)
+      world.removeBody(obj.body)
+      objectsToUpdate.splice(objIndex, 1)
+    } else {
+      // For now, just drop the block down by the number of cleared layers below it
+      // A more sophisticated approach would rebuild the mesh
+      const lowestCellY = Math.min(...info.remainingCells.map(c => c.y))
+      const clearedBelow = clearedLayers.filter(ly => ly < lowestCellY).length
+      
+      if (clearedBelow > 0) {
+        const dropDistance = clearedBelow
+        obj.body.position.y -= dropDistance
+        obj.mesh.position.y -= dropDistance
+      }
+    }
+  }
+  
+  // Drop all other blocks that are above cleared layers
+  const minClearedY = Math.min(...clearedLayers)
+  
+  for (const obj of objectsToUpdate) {
+    if (!obj.mesh?.userData?.blockId) continue
+    if (blockInfoMap.has(obj.mesh.userData.blockId)) continue // Already handled
+    
+    // Check if this block is entirely above the cleared layers
+    const blockY = obj.body.position.y
+    if (blockY > minClearedY + PLATE_HEIGHT + 1) {
+      // Count how many cleared layers are below this block
+      const clearedBelow = clearedLayers.filter(ly => ly + PLATE_HEIGHT < blockY).length
+      if (clearedBelow > 0) {
+        obj.body.position.y -= clearedBelow
+        obj.mesh.position.y -= clearedBelow
+      }
+    }
+  }
 }
 
 
@@ -952,13 +1747,21 @@ function updateGhost() {
     ghostObject.userData.sourceId = selectedObject.mesh.uuid
     ghostObject.userData.isGhost = true
 
-    // Apply Ghost Material
+    // Get block color from original material
+    let blockColor = 0xffffff
+    if (selectedObject.materialCache && selectedObject.materialCache.length > 0) {
+      const originalMat = selectedObject.materialCache[0].originalMaterial
+      if (originalMat && originalMat.color) {
+        blockColor = originalMat.color.getHex()
+      }
+    }
+
+    // Apply Ghost Material - same color as block
     const ghostMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
+      color: blockColor,
       transparent: true,
-      opacity: 0.2,
-      depthWrite: false, // No self-occlusion weirdness?
-      // wireframe: true // maybe too noisy? Let's try separate visual style.
+      opacity: 0.5,
+      depthWrite: false,
     })
 
     ghostObject.traverse(child => {
@@ -1009,6 +1812,7 @@ let isDragging = false
 let dragStartX = 0
 let dragStartY = 0
 let hasMoved = false
+let isTouch = false // Track input type for threshold adjustment
 
 function getRayIntersections(clientX, clientY) {
   mouse.x = (clientX / window.innerWidth) * 2 - 1
@@ -1025,11 +1829,15 @@ function onPointerDown(event) {
 
   let clientX, clientY
   if (event.touches) {
+    // Prevent synthesized mouse events from firing after touch
+    event.preventDefault()
     clientX = event.touches[0].clientX
     clientY = event.touches[0].clientY
+    isTouch = true
   } else {
     clientX = event.clientX
     clientY = event.clientY
+    isTouch = false
   }
 
   const intersects = getRayIntersections(clientX, clientY)
@@ -1077,6 +1885,7 @@ function onPointerMove(event) {
 
   let clientX, clientY
   if (event.touches) {
+    event.preventDefault() // Prevent scroll and synthesized mouse events
     clientX = event.touches[0].clientX
     clientY = event.touches[0].clientY
   } else {
@@ -1085,9 +1894,11 @@ function onPointerMove(event) {
   }
 
   // Check for movement threshold to distinguish tap from drag
+  // Touch needs larger threshold due to finger jitter
   const dx = clientX - dragStartX
   const dy = clientY - dragStartY
-  if (!hasMoved && Math.hypot(dx, dy) > 10) { // Increased threshold to 10px
+  const tapThreshold = isTouch ? 25 : 10 // Touch fingers have more jitter than mouse
+  if (!hasMoved && Math.hypot(dx, dy) > tapThreshold) {
     hasMoved = true
   }
 
@@ -1159,20 +1970,15 @@ function onPointerUp() {
     else if (interactionMode === 'rotate-y') interactionMode = 'rotate-z'
     else interactionMode = 'move'
 
-    // UX Feedback
-    if (ui.hint) {
-      let label = interactionMode.toUpperCase()
-      if (interactionMode === 'rotate-x') label = 'ROTATE X (Red)'
-      if (interactionMode === 'rotate-y') label = 'ROTATE Y (Green)'
-      if (interactionMode === 'rotate-z') label = 'ROTATE Z (Blue)'
-      ui.hint.innerText = `Mode: ${label}`
-    }
 
     if (ui.indicator) {
-      if (interactionMode === 'move') ui.indicator.innerText = "✥"
-      if (interactionMode === 'rotate-x') ui.indicator.innerText = "↻"
-      if (interactionMode === 'rotate-y') ui.indicator.innerText = "↻"
-      if (interactionMode === 'rotate-z') ui.indicator.innerText = "↻"
+      // Only show indicator in move mode, gizmo handles rotation feedback
+      if (interactionMode === 'move') {
+        ui.indicator.innerText = "✥"
+        ui.indicator.classList.remove('hidden')
+      } else {
+        ui.indicator.classList.add('hidden')
+      }
     }
 
     updateGizmos()
@@ -1189,6 +1995,25 @@ window.addEventListener('mouseup', onPointerUp)
 window.addEventListener('touchstart', onPointerDown, { passive: false })
 window.addEventListener('touchmove', onPointerMove, { passive: false })
 window.addEventListener('touchend', onPointerUp)
+
+// Mouse wheel rotation in rotate modes
+window.addEventListener('wheel', (e) => {
+  if (!selectedObject) return
+  if (!interactionMode.startsWith('rotate')) return
+  
+  // Prevent camera zoom when rotating
+  e.preventDefault()
+  
+  const dir = e.deltaY > 0 ? 1 : -1
+  
+  if (interactionMode === 'rotate-x') {
+    rotateBlock(new CANNON.Vec3(1, 0, 0), dir * Math.PI / 2)
+  } else if (interactionMode === 'rotate-y') {
+    rotateBlock(new CANNON.Vec3(0, 1, 0), dir * Math.PI / 2)
+  } else if (interactionMode === 'rotate-z') {
+    rotateBlock(new CANNON.Vec3(0, 0, 1), dir * Math.PI / 2)
+  }
+}, { passive: false })
 
 
 // UI Listeners
@@ -1567,7 +2392,18 @@ function animate() {
         ui.indicator.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`
       }
 
-      updateGizmos() // Keep gizmo attached
+      // Update selection light position to follow block
+      if (selectionLight) {
+        selectionLight.position.copy(object.mesh.position)
+      }
+
+      // Update outline mesh to follow block
+      if (outlineMesh) {
+        outlineMesh.position.copy(object.mesh.position)
+        outlineMesh.quaternion.copy(object.mesh.quaternion)
+      }
+
+      updateGizmos(deltaTime) // Keep gizmo attached and animate
       try {
         updateGhost()  // Keep ghost updated
       } catch (e) {
@@ -1621,5 +2457,8 @@ window.addEventListener('resize', () => {
   camera.updateProjectionMatrix()
   renderer.setSize(window.innerWidth, window.innerHeight)
 })
+
+// Initialize game system
+initGame()
 
 animate()

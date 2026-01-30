@@ -46,14 +46,15 @@ canvas {
 #header {
   pointer-events: auto;
   text-align: center;
-  background: rgba(0, 0, 0, 0.5);
-  padding: 10px;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 12px 20px;
   border-radius: 12px;
-  backdrop-filter: blur(5px);
+  backdrop-filter: blur(10px);
   align-self: center;
   display: flex;
-  gap: 20px;
+  gap: 24px;
   align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 h1 {
@@ -62,11 +63,193 @@ h1 {
   font-weight: 600;
 }
 
+/* Level Info Section */
+#level-info {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+#world-name {
+  font-size: 0.75rem;
+  color: #64b5f6;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 600;
+}
+
+#level-display {
+  font-size: 1.1rem;
+  font-weight: bold;
+  color: #fff;
+}
+
+/* Score Section */
+#score-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 #score-display {
   font-family: monospace;
   font-size: 1.1rem;
   color: #ff9800;
   font-weight: bold;
+}
+
+#progress-container {
+  width: 80px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+#progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #ff9800, #ffb74d);
+  border-radius: 4px;
+  transition: width 0.3s ease-out;
+}
+
+#target-score {
+  font-family: monospace;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Stats Section */
+#stats-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+#lines-display {
+  font-family: monospace;
+  font-size: 1rem;
+  color: #4caf50;
+  font-weight: bold;
+}
+
+/* Clear Feedback Animation */
+#clear-feedback {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 200;
+}
+
+#clear-text {
+  font-size: 3rem;
+  font-weight: 900;
+  color: #ffeb3b;
+  text-shadow: 
+    0 0 20px rgba(255, 235, 59, 0.8),
+    0 0 40px rgba(255, 235, 59, 0.5),
+    2px 2px 4px rgba(0, 0, 0, 0.5);
+  animation: clearPop 1s ease-out forwards;
+}
+
+@keyframes clearPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  20% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1) translateY(-50px);
+  }
+}
+
+/* Multi-line clear bonus text */
+#clear-feedback.multi-clear #clear-text {
+  color: #ff4081;
+  font-size: 4rem;
+  text-shadow: 
+    0 0 30px rgba(255, 64, 129, 0.8),
+    0 0 60px rgba(255, 64, 129, 0.5),
+    2px 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* Game Over Overlay */
+#game-over-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+  pointer-events: auto;
+  backdrop-filter: blur(5px);
+}
+
+#game-over-content {
+  background: rgba(30, 30, 35, 0.95);
+  padding: 40px 60px;
+  border-radius: 20px;
+  text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+#game-over-title {
+  margin: 0 0 20px 0;
+  font-size: 2.5rem;
+  color: #f44336;
+}
+
+#game-over-title.win {
+  color: #4caf50;
+}
+
+#game-over-content p {
+  margin: 10px 0;
+  font-size: 1.2rem;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+#final-score {
+  color: #ff9800 !important;
+  font-size: 1.5rem !important;
+  font-weight: bold;
+}
+
+#btn-restart {
+  margin-top: 30px;
+  padding: 15px 40px;
+  font-size: 1.2rem;
+  background: #2e7d32;
+  border-color: #4caf50;
+  font-weight: bold;
+}
+
+#btn-restart:hover {
+  background: #388e3c;
+}
+
+/* Level up animation */
+.level-up {
+  animation: levelUpPulse 0.5s ease-out;
+}
+
+@keyframes levelUpPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.2); color: #ffeb3b; }
+  100% { transform: scale(1); }
 }
 
 
@@ -87,10 +270,19 @@ button:active {
   transform: scale(0.95);
 }
 
+#bottom-controls {
+  pointer-events: auto;
+  display: flex;
+  justify-content: center;
+  padding-bottom: 20px;
+}
+
 #btn-spawn {
   background: #2e7d32;
   border-color: #4caf50;
   font-weight: bold;
+  padding: 12px 24px;
+  font-size: 1.1rem;
 }
 
 .hidden {
