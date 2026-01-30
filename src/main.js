@@ -14,16 +14,16 @@ CANNON.Vec3.prototype.approxEquals = function (v, epsilon) {
 }
 
 const debugConfig = {
-  opacity: 0.7,
-  roughness: 0.1,
+  opacity: 0.687,
+  roughness: 0.503,
   metalness: 0.1,
-  emissiveIntensity: 0.5,
+  emissiveIntensity: 0,
   transmission: 1,
   thickness: 1,
   depthWrite: true,
   envMapIntensity: 1,
   maxCells: 8,
-  palette: 'Pastel',
+  palette: 'Mineral',
   saveToClipboard: () => {
     // Merge both configs for export
     // Note: lightConfig is defined later, but function runs on click so it should be fine?
@@ -63,49 +63,28 @@ const palettes = {
 }
 
 const gui = new GUI()
-gui.add(debugConfig, 'palette', Object.keys(palettes)).name('Color Palette').onChange(updateAllBlockColors)
-gui.add(debugConfig, 'maxCells', 1, 8, 1).name('Max Block Size')
-gui.add(debugConfig, 'saveToClipboard').name('💾 Save Config')
+gui.hide() // Hidden by default
 
-gui.add(debugConfig, 'opacity', 0, 1).onChange(updateSelectedMaterial)
+// Toggle debug panel: CTRL+ALT+SHIFT+D
+window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.altKey && e.shiftKey && e.key.toLowerCase() === 'd') {
+    e.preventDefault()
+    gui._hidden ? gui.show() : gui.hide()
+  }
+})
+gui.add(debugConfig, 'palette', Object.keys(palettes)).name('Base Palette').onChange(updateAllBlockColors)
+gui.add(debugConfig, 'maxCells', 1, 8, 1).name('Max Polyomino Cubes')
+gui.add(debugConfig, 'saveToClipboard').name('💾 Save All Config')
 
-// Helper to refresh all block colors
-function updateAllBlockColors() {
-  const paletteName = debugConfig.palette
-  objectsToUpdate.forEach(obj => {
-    if (!obj.mesh || !obj.mesh.userData || !obj.mesh.userData.isBlock) return
-
-    // Pick a new color for this block
-    let color
-    if (paletteName === 'Pastel' || !palettes[paletteName]) {
-      const hue = Math.random()
-      const saturation = 0.4 + Math.random() * 0.2
-      const lightness = 0.5 + Math.random() * 0.2
-      color = new THREE.Color().setHSL(hue, saturation, lightness)
-    } else {
-      const colors = palettes[paletteName]
-      const hex = colors[Math.floor(Math.random() * colors.length)]
-      color = new THREE.Color(hex)
-    }
-
-    obj.mesh.traverse(child => {
-      if (child.isMesh && child.material) {
-        child.material.color.copy(color)
-        child.material.emissive.copy(color)
-      }
-    })
-  })
-}
-gui.add(debugConfig, 'roughness', 0, 1).onChange(updateSelectedMaterial)
-gui.add(debugConfig, 'metalness', 0, 1).onChange(updateSelectedMaterial)
-gui.add(debugConfig, 'emissiveIntensity', 0, 5).onChange(updateSelectedMaterial)
-gui.add(debugConfig, 'transmission', 0, 1).onChange(updateSelectedMaterial)
-gui.add(debugConfig, 'thickness', 0, 5).onChange(updateSelectedMaterial)
-gui.add(debugConfig, 'depthWrite').onChange(updateSelectedMaterial)
-gui.add(debugConfig, 'depthWrite').onChange(updateSelectedMaterial)
-gui.add(debugConfig, 'envMapIntensity', 0, 3).onChange((v) => { scene.environmentIntensity = v })
-gui.add(debugConfig, 'maxCells', 1, 8, 1).name('Max Block Size')
-gui.add(debugConfig, 'envMapIntensity', 0, 3).onChange((v) => { scene.environmentIntensity = v })
+const matFolder = gui.addFolder('Block Material')
+matFolder.add(debugConfig, 'opacity', 0, 1).onChange(updateSelectedMaterial)
+matFolder.add(debugConfig, 'roughness', 0, 1).onChange(updateSelectedMaterial)
+matFolder.add(debugConfig, 'metalness', 0, 1).onChange(updateSelectedMaterial)
+matFolder.add(debugConfig, 'emissiveIntensity', 0, 5).onChange(updateSelectedMaterial)
+matFolder.add(debugConfig, 'transmission', 0, 1).onChange(updateSelectedMaterial)
+matFolder.add(debugConfig, 'thickness', 0, 5).onChange(updateSelectedMaterial)
+matFolder.add(debugConfig, 'depthWrite').onChange(updateSelectedMaterial)
+matFolder.open()
 
 // Helper to rebuild geometry if radius changes (Complex, placeholder for now)
 // gui.add(debugConfig, 'radius', 0, 0.5).name('Block Radius (New only)')
@@ -127,6 +106,32 @@ function updateSelectedMaterial() {
   }
 }
 
+function updateAllBlockColors() {
+  const paletteName = debugConfig.palette
+  objectsToUpdate.forEach(obj => {
+    if (!obj.mesh || !obj.mesh.userData || !obj.mesh.userData.isBlock) return
+
+    let color
+    if (paletteName === 'Pastel' || !palettes[paletteName]) {
+      const hue = Math.random()
+      const saturation = 0.4 + Math.random() * 0.2
+      const lightness = 0.5 + Math.random() * 0.2
+      color = new THREE.Color().setHSL(hue, saturation, lightness)
+    } else {
+      const colors = palettes[paletteName]
+      const hex = colors[Math.floor(Math.random() * colors.length)]
+      color = new THREE.Color(hex)
+    }
+
+    obj.mesh.traverse(child => {
+      if (child.isMesh && child.material) {
+        child.material.color.copy(color)
+        child.material.emissive.copy(color)
+      }
+    })
+  })
+}
+
 // --- Scene Setup ---
 const scene = new THREE.Scene()
 scene.background = new THREE.Color(0x15151a) // Slightly darker, richer background
@@ -142,62 +147,72 @@ renderer.setPixelRatio(window.devicePixelRatio)
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = THREE.PCFSoftShadowMap
 renderer.toneMapping = THREE.ACESFilmicToneMapping
-renderer.toneMappingExposure = 0.6
+renderer.toneMappingExposure = 0.096
 document.body.appendChild(renderer.domElement)
 
-// --- Professional Lighting & Environment ---
+// --- Professional Studio Lighting Rig ---
 
-// 1. Environment Map (Vital for Glass!)
+// 1. Environment Reflections (Vital for Glass)
 const pmremGenerator = new THREE.PMREMGenerator(renderer)
 scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture
-scene.environmentIntensity = 1.0
+scene.environmentIntensity = 1.212
 
-// 2. Ambient (Subtle Fill)
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.2)
+// 2. Global Ambiance (Hemisphere Light)
+const ambientLight = new THREE.HemisphereLight(0xddeeff, 0x222222, 1.398)
 scene.add(ambientLight)
 
-// 3. Key Light (Main Warm Directional)
-const keyLight = new THREE.DirectionalLight(0xfff0dd, 1.0)
-keyLight.position.set(5, 10, 5)
+// 3. Key Light (Main Shadows - Warm/Heroic)
+const keyLight = new THREE.DirectionalLight(0xfff5ea, 5)
+keyLight.position.set(10, 15, 10)
 keyLight.castShadow = true
 keyLight.shadow.mapSize.width = 2048
 keyLight.shadow.mapSize.height = 2048
-keyLight.shadow.radius = 2 // Soft shadows
+keyLight.shadow.radius = 4
+keyLight.shadow.bias = -0.0001
 keyLight.shadow.camera.near = 0.5
-keyLight.shadow.camera.far = 50
-keyLight.shadow.camera.left = -10
-keyLight.shadow.camera.right = 10
-keyLight.shadow.camera.top = 10
-keyLight.shadow.camera.bottom = -10
+keyLight.shadow.camera.far = 100
+keyLight.shadow.camera.left = -15
+keyLight.shadow.camera.right = 15
+keyLight.shadow.camera.top = 15
+keyLight.shadow.camera.bottom = -15
 scene.add(keyLight)
 
-// 4. Fill Light (Cooler, softer, opposite side)
-const fillLight = new THREE.DirectionalLight(0xddeeff, 0.5)
-fillLight.position.set(-5, 8, -5)
-fillLight.castShadow = false
+// 4. Fill Light (Soften Shadows - Cool/Subtle)
+const fillLight = new THREE.DirectionalLight(0xebf5ff, 3.56)
+fillLight.position.set(-10, 5, 8)
 scene.add(fillLight)
 
-// 5. Rim Light (Backlight to pop edges)
-// 5. Rim Light (Backlight to pop edges)
-const rimLight = new THREE.SpotLight(0xffffff, 1.0)
-rimLight.position.set(0, 5, -10)
-rimLight.lookAt(0, 0, 0)
+// 5. Rim Light (Silhouette Pop - Neutral)
+const rimLight = new THREE.SpotLight(0xffffff, 2.76)
+rimLight.position.set(0, 12, -15)
+rimLight.angle = 0.6
+rimLight.penumbra = 0.5
+rimLight.decay = 2
+rimLight.distance = 50
+const rimTarget = new THREE.Object3D()
+rimTarget.position.set(0, 4, 0)
+scene.add(rimTarget)
+rimLight.target = rimTarget
 scene.add(rimLight)
 
-// --- Light Debug Controls ---
+// --- Lighting Debug Panel ---
 const lightConfig = {
-  exposure: 0.244,
-  keyIntensity: 1.0,
-  fillIntensity: 0.5,
-  rimIntensity: 1.0,
-  ambientIntensity: 0.2
+  exposure: 0.096,
+  ambientIntensity: 1.398,
+  keyIntensity: 5,
+  fillIntensity: 3.56,
+  rimIntensity: 2.76,
+  envIntensity: 1.212
 }
-const lightFolder = gui.addFolder('Lighting')
-lightFolder.add(lightConfig, 'exposure', 0, 2).onChange((v) => { renderer.toneMappingExposure = v })
-lightFolder.add(lightConfig, 'keyIntensity', 0, 5).onChange((v) => { keyLight.intensity = v })
-lightFolder.add(lightConfig, 'fillIntensity', 0, 5).onChange((v) => { fillLight.intensity = v })
-lightFolder.add(lightConfig, 'rimIntensity', 0, 5).onChange((v) => { rimLight.intensity = v })
-lightFolder.add(lightConfig, 'ambientIntensity', 0, 2).onChange((v) => { ambientLight.intensity = v })
+
+const lightFolder = gui.addFolder('✨ Studio Lighting')
+lightFolder.add(lightConfig, 'exposure', 0, 2).name('Tone Exposure').onChange((v) => { renderer.toneMappingExposure = v })
+lightFolder.add(lightConfig, 'ambientIntensity', 0, 2).name('Global Ambient').onChange((v) => { ambientLight.intensity = v })
+lightFolder.add(lightConfig, 'keyIntensity', 0, 5).name('Key (Front-Top)').onChange((v) => { keyLight.intensity = v })
+lightFolder.add(lightConfig, 'fillIntensity', 0, 5).name('Fill (Side)').onChange((v) => { fillLight.intensity = v })
+lightFolder.add(lightConfig, 'rimIntensity', 0, 5).name('Rim (Back)').onChange((v) => { rimLight.intensity = v })
+lightFolder.add(lightConfig, 'envIntensity', 0, 3).name('Env Reflection').onChange((v) => { scene.environmentIntensity = v })
+lightFolder.open()
 
 // --- Physics Setup ---
 const world = new CANNON.World()
@@ -214,6 +229,106 @@ world.addContactMaterial(defaultContactMaterial)
 const controls = new OrbitControls(camera, renderer.domElement)
 controls.enableDamping = true
 controls.maxPolarAngle = Math.PI / 2 - 0.1
+
+// --- Dynamic Camera System ---
+const cameraConfig = {
+  autoZoom: true,
+  padding: 2.0,          // Minimum padding in world units
+  minDistance: 8,        // Closest zoom allowed
+  maxDistance: 60,       // Furthest zoom allowed
+  smoothing: 0.03,       // Lerp factor (lower = smoother)
+  verticalBias: 0.3,     // How much to offset target upward (0-1 of content height)
+}
+
+// Camera folder in GUI
+const cameraFolder = gui.addFolder('📷 Dynamic Camera')
+cameraFolder.add(cameraConfig, 'autoZoom').name('Auto Zoom')
+cameraFolder.add(cameraConfig, 'padding', 0, 5).name('Edge Padding')
+cameraFolder.add(cameraConfig, 'minDistance', 5, 20).name('Min Distance')
+cameraFolder.add(cameraConfig, 'maxDistance', 20, 100).name('Max Distance')
+cameraFolder.add(cameraConfig, 'smoothing', 0.01, 0.2).name('Smoothing')
+cameraFolder.open()
+
+/**
+ * Calculate axis-aligned bounding box encompassing all blocks + plate
+ * @returns {THREE.Box3} Combined bounds
+ */
+function calculateContentBounds() {
+  const box = new THREE.Box3()
+
+  // Start with the base plate as minimum bounds
+  const plateMin = new THREE.Vector3(-plateSize / 2, 0, -plateSize / 2)
+  const plateMax = new THREE.Vector3(plateSize / 2, plateHeight, plateSize / 2)
+  box.set(plateMin, plateMax)
+
+  // Expand to include all block meshes
+  for (const object of objectsToUpdate) {
+    if (object.mesh && object.mesh.userData && object.mesh.userData.isBlock) {
+      const meshBox = new THREE.Box3().setFromObject(object.mesh)
+      box.union(meshBox)
+    }
+  }
+
+  return box
+}
+
+/**
+ * Compute required camera distance to fit a sphere of given radius
+ * considering both vertical and horizontal FOV constraints.
+ * @param {number} radius - Bounding sphere radius (with padding)
+ * @returns {number} Required distance from target
+ */
+function computeFitDistance(radius) {
+  const vFov = THREE.MathUtils.degToRad(camera.fov)
+  const hFov = 2 * Math.atan(Math.tan(vFov / 2) * camera.aspect)
+
+  // Distance needed to fit vertically and horizontally
+  const dVert = radius / Math.sin(vFov / 2)
+  const dHorz = radius / Math.sin(hFov / 2)
+
+  return Math.max(dVert, dHorz)
+}
+
+/**
+ * Update camera position/target to frame all content with minimum padding.
+ * Called every frame when autoZoom is enabled.
+ */
+function updateDynamicCamera() {
+  if (!cameraConfig.autoZoom) return
+
+  const bounds = calculateContentBounds()
+  const center = new THREE.Vector3()
+  const size = new THREE.Vector3()
+  bounds.getCenter(center)
+  bounds.getSize(size)
+
+  // Bounding sphere radius (diagonal / 2) + padding
+  const diag = Math.sqrt(size.x * size.x + size.y * size.y + size.z * size.z)
+  const radius = diag / 2 + cameraConfig.padding
+
+  // Compute ideal distance
+  let idealDistance = computeFitDistance(radius)
+  idealDistance = THREE.MathUtils.clamp(idealDistance, cameraConfig.minDistance, cameraConfig.maxDistance)
+
+  // Target point: center of content, biased upward so we look slightly down
+  const targetPoint = new THREE.Vector3(
+    center.x,
+    center.y * cameraConfig.verticalBias,
+    center.z
+  )
+
+  // Smoothly move OrbitControls target
+  controls.target.lerp(targetPoint, cameraConfig.smoothing)
+
+  // Current direction from target to camera (preserve user's orbit angle)
+  const direction = new THREE.Vector3().subVectors(camera.position, controls.target).normalize()
+
+  // Desired camera position
+  const desiredPos = new THREE.Vector3().copy(controls.target).addScaledVector(direction, idealDistance)
+
+  // Smoothly interpolate camera position
+  camera.position.lerp(desiredPos, cameraConfig.smoothing)
+}
 
 // --- Objects ---
 const objectsToUpdate = []
@@ -926,28 +1041,29 @@ function onPointerDown(event) {
     }
 
     if (hitObject.userData.isBlock) {
-      if (selectedObject && selectedObject.mesh === hitObject) {
-        // Start Interaction (Move or Rotate)
-        isDragging = true
-        dragStartX = clientX
-        dragStartY = clientY
-        hasMoved = false
-
-        // Setup Drag Plane for Move Mode
-        dragPlane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), selectedObject.mesh.position)
-
-        // Calculate offset (for Move Mode)
-        mouse.x = (clientX / window.innerWidth) * 2 - 1
-        mouse.y = -(clientY / window.innerHeight) * 2 + 1
-        raycaster.setFromCamera(mouse, camera)
-        if (raycaster.ray.intersectPlane(dragPlane, intersection)) {
-          offset.subVectors(selectedObject.mesh.position, intersection)
-        }
-
-        controls.enabled = false // Disable camera
-      } else {
+      // If clicking a different block, select it first
+      if (!selectedObject || selectedObject.mesh !== hitObject) {
         toggleSelection(hitObject)
       }
+
+      // Start Interaction (Move or Rotate) immediately - allows click+drag in one action
+      isDragging = true
+      dragStartX = clientX
+      dragStartY = clientY
+      hasMoved = false
+
+      // Setup Drag Plane for Move Mode
+      dragPlane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), selectedObject.mesh.position)
+
+      // Calculate offset (for Move Mode)
+      mouse.x = (clientX / window.innerWidth) * 2 - 1
+      mouse.y = -(clientY / window.innerHeight) * 2 + 1
+      raycaster.setFromCamera(mouse, camera)
+      if (raycaster.ray.intersectPlane(dragPlane, intersection)) {
+        offset.subVectors(selectedObject.mesh.position, intersection)
+      }
+
+      controls.enabled = false // Disable camera
     } else {
       deselect()
     }
@@ -1085,7 +1201,7 @@ ui.container.addEventListener('mousedown', e => {
 })
 
 ui.btnSpawn.addEventListener('click', spawnBlock)
-ui.btnDrop.addEventListener('click', deselect)
+if (ui.btnDrop) ui.btnDrop.addEventListener('click', deselect)
 
 ui.moveBtns.forEach(btn => {
   btn.addEventListener('click', (e) => {
@@ -1101,19 +1217,21 @@ ui.moveBtns.forEach(btn => {
   })
 })
 
-ui.rotBtns.forEach(btn => {
-  btn.addEventListener('click', (e) => {
-    e.stopPropagation()
-    const target = e.target.closest('button')
-    const axisName = target.dataset.axis
-    const dir = parseInt(target.dataset.dir)
-    let axis = new CANNON.Vec3(0, 1, 0)
-    if (axisName === 'x') axis.set(1, 0, 0)
-    if (axisName === 'z') axis.set(0, 0, 1)
+if (ui.rotBtns) {
+  ui.rotBtns.forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const target = e.target.closest('button')
+      const axisName = target.dataset.axis
+      const dir = parseInt(target.dataset.dir)
+      let axis = new CANNON.Vec3(0, 1, 0)
+      if (axisName === 'x') axis.set(1, 0, 0)
+      if (axisName === 'z') axis.set(0, 0, 1)
 
-    rotateBlock(axis, Math.PI / 2 * dir)
+      rotateBlock(axis, Math.PI / 2 * dir)
+    })
   })
-})
+}
 
 // Keyboard Fallback
 
@@ -1488,6 +1606,9 @@ function animate() {
   if (selectedObject) {
     boxHelper.update()
   }
+
+  // Dynamic camera auto-zoom
+  updateDynamicCamera()
 
   controls.update()
   renderer.render(scene, camera)
