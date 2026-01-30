@@ -9,19 +9,93 @@ import GUI from 'lil-gui'
 // --- Configuration ---
 const TIME_STEP = 1 / 60
 
+CANNON.Vec3.prototype.approxEquals = function (v, epsilon) {
+  return this.distanceTo(v) < epsilon
+}
+
 const debugConfig = {
   opacity: 0.7,
   roughness: 0.1,
   metalness: 0.1,
   emissiveIntensity: 0.5,
-  transmission: 1.0,
-  thickness: 1.0,
+  transmission: 1,
+  thickness: 1,
   depthWrite: true,
-  envMapIntensity: 1.0
+  envMapIntensity: 1,
+  maxCells: 8,
+  palette: 'Pastel',
+  saveToClipboard: () => {
+    // Merge both configs for export
+    // Note: lightConfig is defined later, but function runs on click so it should be fine?
+    // Actually, lightConfig is const, defined below. 
+    // We need to ensure we can access it.
+    // If this throws, we might need to move this function definition or defer it.
+    // But vars are hoisted? No const is not.
+    // BUT the function body is not executed until click. By then, lightConfig IS defined.
+
+    // We can't easily merge them into one flat object if keys collide (they don't currently).
+    // Let's verify valid keys.
+
+    const exportData = {
+      ...debugConfig,
+      lights: (typeof lightConfig !== 'undefined') ? lightConfig : {}
+    }
+    delete exportData.saveToClipboard
+
+    const json = JSON.stringify(exportData, null, 2)
+    navigator.clipboard.writeText(json).then(() => {
+      alert("Full Configuration (Main + Lights) copied to clipboard!")
+    })
+  }
+}
+
+const palettes = {
+  'Pastel': null, // Random within HSL(0-1, 0.4-0.6, 0.5-0.7)
+  'Mineral': [0x7D8E95, 0xA9B3B9, 0xC7CED1, 0xEBEBEB, 0x586972], // Soft Greys/Blues
+  'Botanical': [0x5F7161, 0x6D8B74, 0x8F9779, 0xEFEAD8, 0xD0C9C0], // Sage/Fern/Beige
+  'Clay': [0x8D7B68, 0xA4907C, 0xC8B6A6, 0xF1DEC9, 0xCFB997], // Terracotta/Sand
+  'Oceanic': [0x4682B4, 0x5F9EA0, 0x87CEEB, 0xB0E0E6, 0xADD8E6], // Steel/Sky Blues
+  'Autumn': [0xCD853F, 0xDEB887, 0xF4A460, 0xD2691E, 0x8B4513], // Leafy browns/oranges (Natural)
+  'Berry': [0xBC8F8F, 0xDDA0DD, 0xDB7093, 0xFFB6C1, 0xC71585], // Muted Pinks/Purples
+  'Slate': [0x708090, 0x778899, 0xB0C4DE, 0xE6E6FA, 0xD3D3D3], // Blue-Greys
+  'Savanna': [0xE9967A, 0xF08080, 0xFFA07A, 0xFFDAB9, 0xFFE4B5], // Warm dusty pinks/peaches
+  'Midnight': [0x2F4F4F, 0x483D8B, 0x4682B4, 0x5D3FD3, 0x7B68EE], // Darker but rich (not black)
 }
 
 const gui = new GUI()
+gui.add(debugConfig, 'palette', Object.keys(palettes)).name('Color Palette').onChange(updateAllBlockColors)
+gui.add(debugConfig, 'maxCells', 1, 8, 1).name('Max Block Size')
+gui.add(debugConfig, 'saveToClipboard').name('💾 Save Config')
+
 gui.add(debugConfig, 'opacity', 0, 1).onChange(updateSelectedMaterial)
+
+// Helper to refresh all block colors
+function updateAllBlockColors() {
+  const paletteName = debugConfig.palette
+  objectsToUpdate.forEach(obj => {
+    if (!obj.mesh || !obj.mesh.userData || !obj.mesh.userData.isBlock) return
+
+    // Pick a new color for this block
+    let color
+    if (paletteName === 'Pastel' || !palettes[paletteName]) {
+      const hue = Math.random()
+      const saturation = 0.4 + Math.random() * 0.2
+      const lightness = 0.5 + Math.random() * 0.2
+      color = new THREE.Color().setHSL(hue, saturation, lightness)
+    } else {
+      const colors = palettes[paletteName]
+      const hex = colors[Math.floor(Math.random() * colors.length)]
+      color = new THREE.Color(hex)
+    }
+
+    obj.mesh.traverse(child => {
+      if (child.isMesh && child.material) {
+        child.material.color.copy(color)
+        child.material.emissive.copy(color)
+      }
+    })
+  })
+}
 gui.add(debugConfig, 'roughness', 0, 1).onChange(updateSelectedMaterial)
 gui.add(debugConfig, 'metalness', 0, 1).onChange(updateSelectedMaterial)
 gui.add(debugConfig, 'emissiveIntensity', 0, 5).onChange(updateSelectedMaterial)
@@ -29,6 +103,8 @@ gui.add(debugConfig, 'transmission', 0, 1).onChange(updateSelectedMaterial)
 gui.add(debugConfig, 'thickness', 0, 5).onChange(updateSelectedMaterial)
 gui.add(debugConfig, 'depthWrite').onChange(updateSelectedMaterial)
 gui.add(debugConfig, 'depthWrite').onChange(updateSelectedMaterial)
+gui.add(debugConfig, 'envMapIntensity', 0, 3).onChange((v) => { scene.environmentIntensity = v })
+gui.add(debugConfig, 'maxCells', 1, 8, 1).name('Max Block Size')
 gui.add(debugConfig, 'envMapIntensity', 0, 3).onChange((v) => { scene.environmentIntensity = v })
 
 // Helper to rebuild geometry if radius changes (Complex, placeholder for now)
@@ -110,7 +186,7 @@ scene.add(rimLight)
 
 // --- Light Debug Controls ---
 const lightConfig = {
-  exposure: 0.6,
+  exposure: 0.244,
   keyIntensity: 1.0,
   fillIntensity: 0.5,
   rimIntensity: 1.0,
@@ -125,7 +201,7 @@ lightFolder.add(lightConfig, 'ambientIntensity', 0, 2).onChange((v) => { ambient
 
 // --- Physics Setup ---
 const world = new CANNON.World()
-world.gravity.set(0, -9.82, 0)
+world.gravity.set(0, -25, 0) // Increased gravity for snappier falls
 world.broadphase = new CANNON.SAPBroadphase(world)
 const defaultMaterial = new CANNON.Material('default')
 const defaultContactMaterial = new CANNON.ContactMaterial(defaultMaterial, defaultMaterial, {
@@ -232,6 +308,152 @@ const boxHelper = new THREE.BoxHelper(new THREE.Object3D(), 0xffff00)
 scene.add(boxHelper)
 boxHelper.visible = false
 
+// Rotation Gizmos Group
+const gizmoGroup = new THREE.Group()
+scene.add(gizmoGroup)
+
+function createRotationGizmo(axis, color, radius = 1.2) {
+  const group = new THREE.Group()
+
+  // 1. Axis Line (Infinite-ish or just long enough?)
+  // Let's make it go through the block
+  const lineGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3().copy(axis).multiplyScalar(-3),
+    new THREE.Vector3().copy(axis).multiplyScalar(3)
+  ])
+  const lineMat = new THREE.LineBasicMaterial({ color: color, depthTest: false, transparent: true, opacity: 0.5 })
+  const line = new THREE.Line(lineGeo, lineMat)
+  group.add(line)
+
+  // 2. Curved Arrow (Torus Segment)
+  // We need to orient a Torus to match the rotation plane (perpendicular to axis)
+  const torusRadius = radius
+  const tubeRadius = 0.05
+  const arc = Math.PI * 1.5 // 270 degrees arc
+  const torusGeo = new THREE.TorusGeometry(torusRadius, tubeRadius, 8, 32, arc)
+  const torusMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false, toneMapped: false }) // Emissive-ish
+  const torus = new THREE.Mesh(torusGeo, torusMat)
+
+  // Rotate Torus to align with Axis
+  // Torus default is in XY plane (Z-axis is normal). 
+  // If axis is X (1,0,0) -> Rotate 90 around Y
+  // If axis is Y (0,1,0) -> Rotate 90 around X
+  // If axis is Z (0,0,1) -> Default
+
+  if (axis.x === 1) torus.rotation.y = Math.PI / 2
+  else if (axis.y === 1) torus.rotation.x = Math.PI / 2
+
+  group.add(torus)
+
+  // 3. Arrow Head (Cone)
+  const coneGeo = new THREE.ConeGeometry(0.15, 0.4, 16)
+  const coneMat = new THREE.MeshBasicMaterial({ color: color, depthTest: false, toneMapped: false })
+  const cone = new THREE.Mesh(coneGeo, coneMat)
+
+  // Position cone at end of arc
+  // Math is tricky based on orientation, simplified:
+  // Just hardcode for X/Y/Z variants or generic math
+  // For now, let's just make 3 distinct helper functions or config objects to keep it simple and robust
+  // Actually, generic math:
+  // Point on circle in plane perpendicular to `axis`
+
+  // Let's keep it simple with explicit gizmo creation:
+  return { group, line, torus, cone }
+}
+
+// Pre-build the 3 gizmos
+const gizmoX = createGizmo('x', 0xff0000)
+const gizmoY = createGizmo('y', 0x00ff00)
+const gizmoZ = createGizmo('z', 0x0088ff)
+gizmoGroup.add(gizmoX)
+gizmoGroup.add(gizmoY)
+gizmoGroup.add(gizmoZ)
+gizmoGroup.visible = false
+
+function createGizmo(type, colorHex) {
+  const wrapper = new THREE.Group()
+  const color = new THREE.Color(colorHex)
+
+  // Axis Line
+  const pts = []
+  if (type === 'x') pts.push(new THREE.Vector3(-3, 0, 0), new THREE.Vector3(3, 0, 0))
+  if (type === 'y') pts.push(new THREE.Vector3(0, -3, 0), new THREE.Vector3(0, 3, 0))
+  if (type === 'z') pts.push(new THREE.Vector3(0, 0, -3), new THREE.Vector3(0, 0, 3))
+
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pts),
+    new THREE.LineBasicMaterial({ color: color, depthTest: false, transparent: true, opacity: 0.6 })
+  )
+  wrapper.add(line)
+
+  // Spin Ring (Torus)
+  const torus = new THREE.Mesh(
+    new THREE.TorusGeometry(1.5, 0.05, 8, 48, Math.PI * 1.5),
+    new THREE.MeshBasicMaterial({ color: color, depthTest: false, toneMapped: false })
+  )
+  if (type === 'x') torus.rotation.y = Math.PI / 2
+  if (type === 'y') torus.rotation.x = Math.PI / 2
+  // Z is default
+  wrapper.add(torus)
+
+  // Arrow Tip
+  const cone = new THREE.Mesh(
+    new THREE.ConeGeometry(0.15, 0.3, 12),
+    new THREE.MeshBasicMaterial({ color: color, depthTest: false, toneMapped: false })
+  )
+
+  // Position the tip at the end of the arc
+  // Arc is 1.5 PI (270 deg). Starts at right (0) goes CCW.
+  // End is at 270 deg = -90 deg = Bottom.
+  // We need to match the torus rotation.
+
+  // Manual positioning is safer for clarity:
+  if (type === 'x') {
+    // Ring in YZ plane. 
+    // 0 angle is +X (local). Wait torus in YZ plane means 0 is... ?
+    // Torus default (XY): starts at (R,0,0). Arc 270 deg -> (0, -R, 0).
+    // Rotated Y=90: X became Z. Y stayed Y.
+    // It's confusing. Let's just place it visually.
+
+    // Let's assume simpler: just static meshes hardcoded.
+    cone.position.set(0, -1.5, 0) // Bottom of ring
+    cone.rotation.z = Math.PI // Pointing down/left tangent
+    cone.rotation.x = -Math.PI / 2 // Align with trace
+  }
+  if (type === 'y') {
+    // Ring in XZ plane (Rot X=90).
+    // Default XY -> RotX -> XZ.
+    // Start (R,0,0) -> End (0,-R,0) -> (0,0,R) in XZ?
+    cone.position.set(0, 0, 1.5)
+    cone.rotation.x = Math.PI / 2
+  }
+  if (type === 'z') {
+    // Ring in XY plane.
+    cone.position.set(0, -1.5, 0)
+    cone.rotation.z = Math.PI
+  }
+
+  wrapper.add(cone)
+  return wrapper
+}
+
+function updateGizmos() {
+  if (!selectedObject) {
+    gizmoGroup.visible = false
+    return
+  }
+
+  gizmoGroup.position.copy(selectedObject.mesh.position)
+  gizmoGroup.visible = true
+
+  // Show only active axis
+  gizmoX.visible = (interactionMode === 'rotate-x')
+  gizmoY.visible = (interactionMode === 'rotate-y')
+  gizmoZ.visible = (interactionMode === 'rotate-z')
+
+  // If just 'move', hide all? or user wanted move separate.
+  if (interactionMode === 'move') gizmoGroup.visible = false
+}
 
 // --- Functions ---
 
@@ -243,19 +465,30 @@ function spawnBlock() {
 
 
 function spawnPolyomino(position) {
-  const numCubes = Math.floor(Math.random() * 8) + 1
+  const numCubes = Math.floor(Math.random() * debugConfig.maxCells) + 1
   const cubeSize = 1.0
   // Slightly shrink collider to prevent edge-friction/jamming (0.49 instead of 0.5)
   const halfExtents = new CANNON.Vec3(0.49, 0.49, 0.49)
 
-  // Natural Colors (HSL restricted)
-  const hue = Math.random()
-  const saturation = 0.4 + Math.random() * 0.2 // 40-60%
-  const lightness = 0.4 + Math.random() * 0.2 // 40-60%
-  const color = new THREE.Color().setHSL(hue, saturation, lightness)
+  // Determine Color
+  let color
+  const paletteName = debugConfig.palette
+  if (paletteName === 'Pastel' || !palettes[paletteName]) {
+    // Existing Natural HSL Logic
+    const hue = Math.random()
+    const saturation = 0.4 + Math.random() * 0.2 // 40-60%
+    const lightness = 0.5 + Math.random() * 0.2  // 50-70%
+    color = new THREE.Color().setHSL(hue, saturation, lightness)
+  } else {
+    // Pick random from preset
+    const colors = palettes[paletteName]
+    const hex = colors[Math.floor(Math.random() * colors.length)]
+    color = new THREE.Color(hex)
+  }
 
   const material = new THREE.MeshStandardMaterial({
     color: color,
+    emissive: color, // Make it glow slightly with own color (Glass effect needs this base)
     metalness: 0.1,
     roughness: 0.5,
     flatShading: false // Ensure smooth shading
@@ -495,20 +728,32 @@ function toggleSelection(meshGroup) {
   selectedObject = {
     mesh: meshGroup,
     body: objData.body,
-    originalMass: objData.body.mass,
+    originalMass: 1.0, // Always 1.0 for active
     userData: meshGroup.userData,
     targetPosition: new CANNON.Vec3().copy(objData.body.position),
     materialCache: meshes
   }
 
+  // WAKE UP!
+  selectedObject.body.type = CANNON.Body.DYNAMIC
+  selectedObject.body.mass = 1.0
+  selectedObject.body.updateMassProperties()
+  selectedObject.body.wakeUp() // Ensure it's ready to move
+
   interactionMode = 'move' // Default start mode
   if (ui.hint) ui.hint.innerText = `Mode: MOVE`
   if (ui.indicator) {
-    ui.indicator.innerText = "✥ MOVE"
+    ui.indicator.innerText = "✥"
+    ui.indicator.classList.remove('hidden')
+  }
+
+  if (ui.indicator) {
+    ui.indicator.innerText = "✥"
     ui.indicator.classList.remove('hidden')
   }
 
   updateUI()
+  updateGhost() // Initial creation
 }
 
 function deselect() {
@@ -523,35 +768,118 @@ function deselect() {
     })
   }
 
-  // boxHelper.visible = false
+  // Remove Ghost
+  if (ghostObject) {
+    scene.remove(ghostObject)
+    ghostObject = null
+  }
 
-  // Physics: Make Dynamic again (already dynamic, but wake up)
-  selectedObject.body.wakeUp()
+  // --- HARD DROP & LOCK ---
+  // Snap to the lowest valid position (Ghost Position)
+  const currentTarget = selectedObject.targetPosition
+  const currentRot = selectedObject.body.quaternion
+  // We utilize the robust floor calculation in the helper now
+  const landingPos = resolveCollisionClimb(currentTarget, currentRot)
+
+  // Teleport to Landing Spot
+  selectedObject.body.position.copy(landingPos)
+  selectedObject.mesh.position.copy(landingPos)
+  selectedObject.body.quaternion.copy(currentRot)
+  selectedObject.mesh.quaternion.copy(currentRot)
+
+  // Physics: Lock In Place
+  // LOCK IT IN PLACE! (Tetris Style)
+  // Instead of waking up, we set mass to 0 so it becomes an immovable static obstacle
+  selectedObject.body.mass = 0
+  selectedObject.body.type = CANNON.Body.STATIC // or KINEMATIC if we want to move it later programmatically
+  selectedObject.body.updateMassProperties()
+  selectedObject.body.velocity.set(0, 0, 0)
+  selectedObject.body.angularVelocity.set(0, 0, 0)
 
   if (ui.indicator) ui.indicator.classList.add('hidden')
 
+  // Clean up references
   selectedObject = null
   updateUI()
+  updateGizmos()
 }
 
-function moveBlock(x, y, z) {
-  if (!selectedObject) return
-  selectedObject.body.position.x += x
-  selectedObject.body.position.y += y
-  selectedObject.body.position.z += z
+
+// --- GHOST SYSTEM ---
+let ghostObject = null
+
+function updateGhost() {
+  if (!selectedObject) {
+    if (ghostObject) {
+      scene.remove(ghostObject)
+      ghostObject = null
+    }
+    return
+  }
+
+  // 1. Create Ghost if it doesn't match selected object
+  if (!ghostObject || ghostObject.userData.sourceId !== selectedObject.mesh.uuid) {
+    if (ghostObject) scene.remove(ghostObject)
+
+    // ghostObject = selectedObject.mesh.clone() // CRASHES due to circular userData (Cannon body)
+
+    // Manual Clone
+    ghostObject = new THREE.Group()
+    ghostObject.position.copy(selectedObject.mesh.position)
+    ghostObject.quaternion.copy(selectedObject.mesh.quaternion)
+    ghostObject.scale.copy(selectedObject.mesh.scale)
+
+    selectedObject.mesh.children.forEach(child => {
+      const clone = child.clone()
+      ghostObject.add(clone)
+    })
+
+    ghostObject.userData.sourceId = selectedObject.mesh.uuid
+    ghostObject.userData.isGhost = true
+
+    // Apply Ghost Material
+    const ghostMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.2,
+      depthWrite: false, // No self-occlusion weirdness?
+      // wireframe: true // maybe too noisy? Let's try separate visual style.
+    })
+
+    ghostObject.traverse(child => {
+      if (child.isMesh) {
+        child.material = ghostMat
+        child.castShadow = false
+        child.receiveShadow = false
+      }
+    })
+
+    scene.add(ghostObject)
+  }
+
+  // 2. Calculate Landing Position
+  // Start at floor (Y ~ 0.5 for unit cube)
+  const currentTarget = selectedObject.targetPosition
+  const currentRot = selectedObject.body.quaternion
+
+  const baseTestPos = new CANNON.Vec3(currentTarget.x, 0.5, currentTarget.z)
+
+  // Use our climb logic to find lowest valid spot
+  // Note: resolveCollisionClimb checks for overlap and goes UP.
+  // So starting at bottom and climbing up finds the landing spot.
+  const landingPos = resolveCollisionClimb(baseTestPos, currentRot)
+
+  // 3. Update Ghost Transform
+  ghostObject.position.set(landingPos.x, landingPos.y, landingPos.z)
+  ghostObject.quaternion.copy(selectedObject.mesh.quaternion)
+
+  // Hide if Ghost is exactly at the same place as the block (it overlaps)
+  // distanceTo check
+  const dist = ghostObject.position.distanceTo(selectedObject.mesh.position)
+  ghostObject.visible = (dist > 0.1)
 }
 
-function rotateBlock(axis, angle) {
-  if (!selectedObject) return
-  const q = new CANNON.Quaternion()
-  q.setFromAxisAngle(axis, angle)
-  selectedObject.body.quaternion = q.mult(selectedObject.body.quaternion)
 
-  // Re-snap Position because rotating around centroid might misalign the grid
-  const snappedPos = getSnappedPosition(selectedObject.body.position, selectedObject.body.quaternion, selectedObject.userData.refOffset)
-  selectedObject.body.position.copy(snappedPos)
-  if (selectedObject.targetPosition) selectedObject.targetPosition.copy(snappedPos)
-}
 
 
 // --- Interaction Listeners ---
@@ -668,42 +996,70 @@ function onPointerMove(event) {
       }
 
       // Update TARGET
-      selectedObject.targetPosition.x = snappedPos.x
-      selectedObject.targetPosition.z = snappedPos.z
+      // Only trigger animation if target changes (Discrete Step)
+      if (!selectedObject.targetPosition.approxEquals(snappedPos, 0.01)) {
+        // Trigger smooth step
+        moveBlock(snappedPos.x - selectedObject.targetPosition.x, 0, snappedPos.z - selectedObject.targetPosition.z)
+      }
+
+      // We don't need to manually set targetPosition.x/z here because moveBlock does it
+      // via animateBlockAction -> selectedObject.targetPosition.copy
+      // and animateBlockAction starts the tween.
 
       boxHelper.update()
     }
-  } else if (interactionMode === 'rotate') {
-    // --- ROTATE MODE: Swipe Logic ---
+  } else if (interactionMode.startsWith('rotate')) {
+    // --- AXIS ROTATION MODES ---
     const SWIPE_THRESHOLD = 30
 
-    if (Math.abs(dx) > SWIPE_THRESHOLD) {
-      // Horizontal Swipe -> Y Axis Rotation
+    // Rotate-Y (Green, Vertical Axis) -> Horizontal Gesture usually feels best (Spin)
+    if (interactionMode === 'rotate-y' && Math.abs(dx) > SWIPE_THRESHOLD) {
       const dir = Math.sign(dx)
       rotateBlock(new CANNON.Vec3(0, 1, 0), dir * Math.PI / 2)
-      // Reset drag start to allow multiple steps or debounce
-      dragStartX = clientX
-      dragStartY = clientY
-    } else if (Math.abs(dy) > SWIPE_THRESHOLD) {
-      // Vertical Swipe -> X Axis Rotation (Tumble forward/back)
+      dragStartX = clientX; dragStartY = clientY
+    }
+    // Rotate-X (Red, Left-Right Axis) -> Vertical Gesture (Tumble)
+    else if (interactionMode === 'rotate-x' && Math.abs(dy) > SWIPE_THRESHOLD) {
       const dir = Math.sign(dy)
-      rotateBlock(new CANNON.Vec3(1, 0, 0), dir * Math.PI / 2)
-      dragStartX = clientX
-      dragStartY = clientY
+      rotateBlock(new CANNON.Vec3(1, 0, 0), dir * Math.PI / 2) // Check sign feel
+      dragStartX = clientX; dragStartY = clientY
+    }
+    // Rotate-Z (Blue, Forward Axis) -> Horizontal Gesture? Or Vertical?
+    // Let's try Horizontal (Spin dial)
+    else if (interactionMode === 'rotate-z' && Math.abs(dx) > SWIPE_THRESHOLD) {
+      const dir = Math.sign(dx)
+      rotateBlock(new CANNON.Vec3(0, 0, 1), -dir * Math.PI / 2) // Invert for "dial" feel?
+      dragStartX = clientX; dragStartY = clientY
     }
   }
 }
 
 function onPointerUp() {
   if (isDragging && !hasMoved && selectedObject) {
-    // Tap Detected on Selected Object -> Toggle Mode
-    interactionMode = interactionMode === 'move' ? 'rotate' : 'move'
+    // Tap Detected on Selected Object -> Toggle Mode Cycle
+    // move -> rotate-x -> rotate-y -> rotate-z -> move
+    if (interactionMode === 'move') interactionMode = 'rotate-x'
+    else if (interactionMode === 'rotate-x') interactionMode = 'rotate-y'
+    else if (interactionMode === 'rotate-y') interactionMode = 'rotate-z'
+    else interactionMode = 'move'
 
     // UX Feedback
-    if (ui.hint) ui.hint.innerText = `Mode: ${interactionMode.toUpperCase()}`
-    if (ui.indicator) {
-      ui.indicator.innerText = interactionMode === 'move' ? "✥ MOVE" : "↻ ROTATE"
+    if (ui.hint) {
+      let label = interactionMode.toUpperCase()
+      if (interactionMode === 'rotate-x') label = 'ROTATE X (Red)'
+      if (interactionMode === 'rotate-y') label = 'ROTATE Y (Green)'
+      if (interactionMode === 'rotate-z') label = 'ROTATE Z (Blue)'
+      ui.hint.innerText = `Mode: ${label}`
     }
+
+    if (ui.indicator) {
+      if (interactionMode === 'move') ui.indicator.innerText = "✥"
+      if (interactionMode === 'rotate-x') ui.indicator.innerText = "↻"
+      if (interactionMode === 'rotate-y') ui.indicator.innerText = "↻"
+      if (interactionMode === 'rotate-z') ui.indicator.innerText = "↻"
+    }
+
+    updateGizmos()
 
     console.log("Switched to", interactionMode)
   }
@@ -804,37 +1160,220 @@ function moveBlockCameraRelative(xInput, zInput) {
     return
   }
 
-  // Apply Input to Target
-  // Use current targetPosition if available, else body position
-  const startX = selectedObject.targetPosition ? selectedObject.targetPosition.x : selectedObject.body.position.x
-  const startZ = selectedObject.targetPosition ? selectedObject.targetPosition.z : selectedObject.body.position.z
-
-  const tentativePos = new CANNON.Vec3(
-    startX + bestAxis.x * SNAP,
-    selectedObject.body.position.y,
-    startZ + bestAxis.z * SNAP
-  )
-
-  // Robust Snap this tentative position
-  let snappedPos = getSnappedPosition(tentativePos, selectedObject.body.quaternion, selectedObject.userData.refOffset)
-
-  // Bounds Clamp
-  if (selectedObject.userData.minOffset && selectedObject.userData.maxOffset) {
-    snappedPos = getClampedPosition(snappedPos, selectedObject.body.quaternion, selectedObject.userData.minOffset, selectedObject.userData.maxOffset)
-  }
-
-  // Init target if needed (should be set on selection but safety check)
-  if (!selectedObject.targetPosition) selectedObject.targetPosition = new CANNON.Vec3().copy(selectedObject.body.position)
-
-  selectedObject.targetPosition.x = snappedPos.x
-  selectedObject.targetPosition.z = snappedPos.z
+  // Apply Camera Relative Motion
+  moveBlock(bestAxis.x * SNAP, 0, bestAxis.z * SNAP)
 }
 
+// --- ANIMATION SYSTEM ---
+let actionTween = null // { startPos, endPos, startRot, endRot, startTime, duration }
+
+function animateBlockAction(targetPos, targetRot) {
+  if (!selectedObject) return
+
+  // Convert everything to THREE types for easy interpolation calculations
+  const startPos = new THREE.Vector3().copy(selectedObject.mesh.position)
+  const endPos = new THREE.Vector3(targetPos.x, targetPos.y, targetPos.z)
+
+  const startRot = new THREE.Quaternion().copy(selectedObject.mesh.quaternion)
+  const endRot = new THREE.Quaternion(targetRot.x, targetRot.y, targetRot.z, targetRot.w)
+
+  actionTween = {
+    startPos, endPos,
+    startRot, endRot,
+    startTime: performance.now(),
+    duration: 350 // ms
+  }
+
+  // Also update the "Logical" target immediately so subsequent taps work relative to new state
+  selectedObject.targetPosition.copy(targetPos)
+  selectedObject.body.quaternion.copy(targetRot)
+  selectedObject.body.position.copy(targetPos)
+}
+
+// Helper to check if a hypothetical placement overlaps with existing blocks
+function isOverlapping(pos, quat, subjectBody) {
+  if (!subjectBody || !subjectBody.shapes) return false
+
+  try {
+    // 1. Get all sub-shape world positions for the SUBJECT
+    const subjectCenters = []
+    for (let i = 0; i < subjectBody.shapes.length; i++) {
+      const shapeOffset = subjectBody.shapeOffsets[i]
+      const worldOffset = quat.vmult(shapeOffset)
+      const worldPos = pos.vadd(worldOffset)
+      subjectCenters.push(worldPos)
+    }
+
+    // 2. Compare against all other bodies
+    for (const object of objectsToUpdate) {
+      if (!object.body || object.body === subjectBody) continue // Skip self or invalid
+
+      // Optimization: Quick AABB/Distance check?
+      if (object.body.position.distanceTo(pos) > 10) continue // Too far
+
+      for (let j = 0; j < object.body.shapes.length; j++) {
+        const otherOffset = object.body.shapeOffsets[j]
+        const otherWorldOffset = object.body.quaternion.vmult(otherOffset)
+        const otherWorldPos = object.body.position.vadd(otherWorldOffset)
+
+        // 3. Check collision between Sub-Shapes
+        for (const subjPos of subjectCenters) {
+          if (subjPos.distanceTo(otherWorldPos) < 0.9) { // Strict overlap only (allow touching)
+            return true // Collision detected
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("Overlap Check Error:", e)
+    return false
+  }
+  return false
+}
+
+// Helper to calculate the Y position where the block sits on the floor (Y=0)
+function calculateBaseY(body, quat) {
+  let minY = Infinity
+  for (let i = 0; i < body.shapes.length; i++) {
+    const shapeOffset = body.shapeOffsets[i]
+    // Rotate offset to World Space
+    const worldOffset = quat.vmult(shapeOffset)
+    if (worldOffset.y < minY) {
+      minY = worldOffset.y
+    }
+  }
+  // Debug Log
+  // Plate top is at Y=0.5. 
+  // Bottom of block is: BodyY + minY - 0.5.
+  // We want: BodyY + minY - 0.5 = 0.5 => BodyY = 1.0 - minY.
+  const proposedY = 1.0 - minY
+  console.log(`CalcBaseY: minY=${minY.toFixed(2)}, ProposedY=${proposedY.toFixed(2)}`)
+  return proposedY
+}
+
+function resolveCollisionClimb(targetPos, targetRot) {
+  // 1. Determine Floor Alignment Y
+  const floorY = calculateBaseY(selectedObject.body, targetRot)
+
+  // Start testing at the Floor Level (or current X/Z)
+  const testPos = new CANNON.Vec3(targetPos.x, floorY, targetPos.z)
+
+  let attempts = 0
+  const MAX_CLIMB = 20 // Allow high stacks
+
+  // Check initial position first
+  while (isOverlapping(testPos, targetRot, selectedObject.body) && attempts < MAX_CLIMB) {
+    testPos.y += 1.0 // Move up one grid unit
+    attempts++
+  }
+
+  return testPos
+}
+
+function updateActionTween() {
+  if (!actionTween || !selectedObject) return
+
+  const now = performance.now()
+  let progress = (now - actionTween.startTime) / actionTween.duration
+  if (progress > 1) progress = 1
+
+  // Ease In Out Cubic
+  const ease = progress < 0.5 ? 4 * progress * progress * progress : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+
+  // Interpolate Visual Mesh
+  selectedObject.mesh.position.lerpVectors(actionTween.startPos, actionTween.endPos, ease)
+  selectedObject.mesh.quaternion.slerpQuaternions(actionTween.startRot, actionTween.endRot, ease)
+
+  // Sync Physics Body (Kinematic override)
+  selectedObject.body.position.set(
+    selectedObject.mesh.position.x,
+    selectedObject.mesh.position.y,
+    selectedObject.mesh.position.z
+  )
+  selectedObject.body.quaternion.set(
+    selectedObject.mesh.quaternion.x,
+    selectedObject.mesh.quaternion.y,
+    selectedObject.mesh.quaternion.z,
+    selectedObject.mesh.quaternion.w
+  )
+
+  if (progress === 1) {
+    actionTween = null
+  }
+}
+
+
+function moveBlock(x, y, z) {
+  if (!selectedObject) return
+  // Use current TARGET as base, not current position (to avoid lag accumulation)
+  const basePos = selectedObject.targetPosition
+  const newPos = new CANNON.Vec3(basePos.x + x, basePos.y + y, basePos.z + z)
+
+  if (selectedObject.userData.minOffset && selectedObject.userData.maxOffset) {
+    const clamped = getClampedPosition(newPos, selectedObject.body.quaternion, selectedObject.userData.minOffset, selectedObject.userData.maxOffset)
+    newPos.copy(clamped)
+  }
+
+  // Resolve Collisions (Auto-Stack)
+  const stackedPos = resolveCollisionClimb(newPos, selectedObject.body.quaternion)
+
+  animateBlockAction(stackedPos, selectedObject.body.quaternion)
+}
+
+// Helper to snap quaternion to nearest 90-degree increments
+function snapQuaternion(q) {
+  const euler = new THREE.Euler().setFromQuaternion(q)
+  const snap = (angle) => Math.round(angle / (Math.PI / 2)) * (Math.PI / 2)
+  euler.x = snap(euler.x)
+  euler.y = snap(euler.y)
+  euler.z = snap(euler.z)
+  return new CANNON.Quaternion().setFromEuler(euler.x, euler.y, euler.z)
+}
+
+function rotateBlock(axis, angle) {
+  if (!selectedObject) return
+
+  const q = new CANNON.Quaternion()
+  q.setFromAxisAngle(axis, angle)
+
+  // Snap base rotation first to fix any physics drift
+  // Rotate in WORLD SPACE (q * current) to match World Gizmos
+  let newRot = q.mult(selectedObject.body.quaternion)
+
+  // FIX: Snap to nearest 90 degrees to prevent "diagonal" drift from physics
+  // Convert CANNON Quat to THREE Quat for easier Euler conversion if needed
+  // Or just use my helper above which uses THREE inside.
+  const tQ = new THREE.Quaternion(newRot.x, newRot.y, newRot.z, newRot.w)
+  const euler = new THREE.Euler().setFromQuaternion(tQ)
+
+  // Snap Euler angles
+  euler.x = Math.round(euler.x / (Math.PI / 2)) * (Math.PI / 2)
+  euler.y = Math.round(euler.y / (Math.PI / 2)) * (Math.PI / 2)
+  euler.z = Math.round(euler.z / (Math.PI / 2)) * (Math.PI / 2)
+
+  const finalTQ = new THREE.Quaternion().setFromEuler(euler)
+  newRot = new CANNON.Quaternion(finalTQ.x, finalTQ.y, finalTQ.z, finalTQ.w)
+
+  // Calculate Position Compensation (Pivot around center)
+  // 1. Determine new snapped position for this rotation
+  const idealPos = selectedObject.targetPosition.clone() // Start where we are
+  let snappedPos = getSnappedPosition(idealPos, newRot, selectedObject.userData.refOffset)
+
+  // 2. Clamp
+  if (selectedObject.userData.minOffset) {
+    snappedPos = getClampedPosition(snappedPos, newRot, selectedObject.userData.minOffset, selectedObject.userData.maxOffset)
+  }
+
+  // Resolve Collisions (Auto-Stack)
+  const stackedPos = resolveCollisionClimb(snappedPos, newRot)
+
+  animateBlockAction(stackedPos, newRot)
+}
 
 // Keyboard Fallback
 window.addEventListener('keydown', (e) => {
   if (!selectedObject) return
-  const speed = 1.0 // This effectively becomes grid units if normalized? No, world units. 
+  const speed = 1.0 // This effectively becomes grid units if normalized? No, world units.
   // Snap will handle grid alignment.
 
   switch (e.key) {
@@ -880,18 +1419,22 @@ function animate() {
       object.body.velocity.set(0, 0, 0)
       object.body.angularVelocity.set(0, 0, 0)
 
-      // Move visual mesh smoothly to target
-      object.mesh.position.lerp(selectedObject.targetPosition, 0.2)
-      object.mesh.quaternion.slerp(object.body.quaternion, 0.2) // smooth rotation
+      // Animation handling
+      if (actionTween) {
+        updateActionTween()
+      } else {
+        // Idle State: Sync visual to physics/target
+        // No lerp needed if we are discrete stepping, but good for drift correction 
+        // if physics moves it (e.g. falling).
 
-      // Sync Body to Mesh (Kinematic-like control)
-      // Actually we want body to be the source of truth for physics, but here we drive it manually.
-      // So we set body to match strict snap, while mesh lerps for visual.
-      // object.body.position.copy(selectedObject.targetPosition) // Don't do this, physics needs to simulate?
-      // No, we are overriding physics for the selected object (gravity only on Y?)
-      // We decided earlier: Gravity only on Y. X/Z manually controlled.
-      object.body.position.x = selectedObject.targetPosition.x
-      object.body.position.z = selectedObject.targetPosition.z
+        // Actually, let's keep a very stiff lerp for stability, or just copy?
+        // If we are "Move Mode", we only move via Tweens now.
+        // But if we drop it, it falls.
+
+        // Sync Mesh to Body (Physics is Truth when no tween)
+        object.mesh.position.copy(object.body.position)
+        object.mesh.quaternion.copy(object.body.quaternion)
+      }
       // Y is handled by physics (gravity)
 
       // Update Mode Indicator Position
@@ -904,6 +1447,13 @@ function animate() {
         const y = (-(pos.y * .5) + .5) * window.innerHeight
 
         ui.indicator.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`
+      }
+
+      updateGizmos() // Keep gizmo attached
+      try {
+        updateGhost()  // Keep ghost updated
+      } catch (e) {
+        console.error("Ghost Error:", e)
       }
 
     } else {
