@@ -5,23 +5,58 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <title>ShakyGrounds</title>
-  <script type="module" crossorigin src="/ShakyGrounds/assets/index-BVsFFQIw.js"></script>
-  <link rel="stylesheet" crossorigin href="/ShakyGrounds/assets/index-N3j2hPsU.css">
+  
+  <!-- PWA Meta Tags -->
+  <meta name="description" content="A 3D block stacking puzzle game" />
+  <meta name="theme-color" content="#202025" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ShakyGrounds" />
+  
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="./manifest.json" />
+  
+  <!-- Icons -->
+  <link rel="icon" type="image/png" sizes="512x512" href="./icons/512.png" />
+  <link rel="apple-touch-icon" href="./icons/192.png" />
+  <script type="module" crossorigin src="/ShakyGrounds/assets/index-8wieaiCb.js"></script>
+  <link rel="stylesheet" crossorigin href="/ShakyGrounds/assets/index-B1v5b0F5.css">
 </head>
 
 <body>
   <div id="app"></div>
 
   <div id="ui-container">
+    <!-- Top Header with Game Info -->
     <div id="header">
-      <h1>Tower Builder</h1>
-      <span id="score-display">Blocks: 0</span>
-      <button id="btn-spawn">Spawn Block</button>
+      <div id="level-info">
+        <span id="world-name">Orientation</span>
+        <span id="level-display">Fill the gaps!</span>
+      </div>
+      <div id="score-section">
+        <span id="score-display">Score: 0</span>
+      </div>
+      <div id="stats-section">
+        <span id="lines-display">Lines: 0</span>
+      </div>
     </div>
 
-    <div id="controls-hint" class="hidden">
-      <div id="controls-hint">Tap Block to Toggle Mode</div>
+    <!-- Layer Clear Feedback -->
+    <div id="clear-feedback" class="hidden">
+      <span id="clear-text">+100</span>
     </div>
+
+    <!-- Game Over Overlay -->
+    <div id="game-over-overlay" class="hidden">
+      <div id="game-over-content">
+        <h2 id="game-over-title">Game Over</h2>
+        <p id="final-score">Score: 0</p>
+        <p id="final-level">Level: 1</p>
+        <p id="final-lines">Lines Cleared: 0</p>
+        <button id="btn-restart">Play Again</button>
+      </div>
+    </div>
+
     <div id="mode-indicator" class="hidden"></div>
     <div id="selected-controls" class="hidden">
       <div class="control-group dpad">
@@ -37,12 +72,25 @@
       </div>
 
     </div>
+    
+    <div id="bottom-controls">
+      <button id="btn-spawn">Next Block</button>
+    </div>
   </div>
 
   <script>
-    // Bridge UI touches to keyboard events or direct calls
-    // We will handle this in main.js ideally, or here if simple.
-    // Let's keep main.js as the logic hub.
+    // Register Service Worker for PWA
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+          .then((registration) => {
+            console.log('SW registered:', registration.scope)
+          })
+          .catch((error) => {
+            console.log('SW registration failed:', error)
+          })
+      })
+    }
   </script>
 </body>
 
