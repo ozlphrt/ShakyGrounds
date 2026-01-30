@@ -102,6 +102,27 @@ const gridHelper = new THREE.GridHelper(plateSize, 8, 0x888888, 0x555555)
 gridHelper.position.y = plateHeight + 0.01
 scene.add(gridHelper)
 
+// --- Invisible Walls ---
+const wallThickness = 1
+const wallHeight = 20
+const wallOffset = plateSize / 2 + wallThickness / 2
+
+const wallShapes = [
+  { size: [plateSize, wallHeight, wallThickness], pos: [0, wallHeight / 2, -wallOffset] },
+  { size: [plateSize, wallHeight, wallThickness], pos: [0, wallHeight / 2, wallOffset] },
+  { size: [wallThickness, wallHeight, plateSize], pos: [-wallOffset, wallHeight / 2, 0] },
+  { size: [wallThickness, wallHeight, plateSize], pos: [wallOffset, wallHeight / 2, 0] }
+]
+
+wallShapes.forEach(spec => {
+  const wallBody = new CANNON.Body({
+    mass: 0, // Static
+    position: new CANNON.Vec3(...spec.pos),
+    shape: new CANNON.Box(new CANNON.Vec3(spec.size[0] / 2, spec.size[1] / 2, spec.size[2] / 2))
+  })
+  world.addBody(wallBody)
+})
+
 
 
 // --- Logic Variables ---
@@ -201,7 +222,29 @@ function spawnPolyomino(position) {
     group.add(mesh)
   })
 
-  group.userData = { isBlock: true, body: body, refOffset: refOffset }
+  // Calculate Local AABB for Clamping
+  let minX = Infinity, minY = Infinity, minZ = Infinity
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity
+
+  coords.forEach(c => {
+    const localX = (c.x - centroid.x) * cubeSize
+    const localY = (c.y - centroid.y) * cubeSize
+    const localZ = (c.z - centroid.z) * cubeSize
+
+    // Check extents (centers +/- half extent)
+    const he = cubeSize * 0.5
+    minX = Math.min(minX, localX - he)
+    minY = Math.min(minY, localY - he)
+    minZ = Math.min(minZ, localZ - he)
+    maxX = Math.max(maxX, localX + he)
+    maxY = Math.max(maxY, localY + he)
+    maxZ = Math.max(maxZ, localZ + he)
+  })
+
+  const minOffset = new CANNON.Vec3(minX, minY, minZ)
+  const maxOffset = new CANNON.Vec3(maxX, maxY, maxZ)
+
+  group.userData = { isBlock: true, body: body, refOffset: refOffset, minOffset, maxOffset }
   createObject(group, body)
 
   // Initial Snap
@@ -231,6 +274,57 @@ function getSnappedPosition(currentPos, quaternion, refOffset) {
   return new CANNON.Vec3(newBodyX, currentPos.y, newBodyZ)
 }
 
+function getClampedPosition(targetPos, quaternion, minOffset, maxOffset) {
+  // We need to calculate the AABB in World Space based on current rotation
+  // This is tricky for arbitrary rotations. 
+  // Simplified Approach: 
+  // 1. Get world max/min extent by rotating checks? 
+  // Or just check if the "Farthest Point" in each direction exceeds limits.
+  // 4 (Wall) - approx (Size/2). 
+
+  // Robust method: 
+  // We have local minOffset/maxOffset. 
+  // We want to find World Max/Min X and Z.
+  // Corners of AABB:
+  const corners = [
+    new CANNON.Vec3(minOffset.x, minOffset.y, minOffset.z),
+    new CANNON.Vec3(maxOffset.x, minOffset.y, minOffset.z),
+    new CANNON.Vec3(minOffset.x, maxOffset.y, minOffset.z),
+    new CANNON.Vec3(maxOffset.x, maxOffset.y, minOffset.z),
+    new CANNON.Vec3(minOffset.x, minOffset.y, maxOffset.z),
+    new CANNON.Vec3(maxOffset.x, minOffset.y, maxOffset.z),
+    new CANNON.Vec3(minOffset.x, maxOffset.y, maxOffset.z),
+    new CANNON.Vec3(maxOffset.x, maxOffset.y, maxOffset.z)
+  ]
+
+  let wMinX = Infinity, wMaxX = -Infinity
+  let wMinZ = Infinity, wMaxZ = -Infinity
+
+  corners.forEach(corner => {
+    const worldCorner = new CANNON.Vec3().copy(corner)
+    quaternion.vmult(worldCorner, worldCorner)
+    worldCorner.vadd(targetPos, worldCorner) // Add proposed position
+
+    wMinX = Math.min(wMinX, worldCorner.x)
+    wMaxX = Math.max(wMaxX, worldCorner.x)
+    wMinZ = Math.min(wMinZ, worldCorner.z)
+    wMaxZ = Math.max(wMaxZ, worldCorner.z)
+  })
+
+  // Clamp Limits (PlateSize/2 = 4)
+  const LIMIT = 4.0
+  let clampX = 0
+  let clampZ = 0
+
+  if (wMaxX > LIMIT) clampX = LIMIT - wMaxX
+  if (wMinX < -LIMIT) clampX = -LIMIT - wMinX
+
+  if (wMaxZ > LIMIT) clampZ = LIMIT - wMaxZ
+  if (wMinZ < -LIMIT) clampZ = -LIMIT - wMinZ
+
+  return new CANNON.Vec3(targetPos.x + clampX, targetPos.y, targetPos.z + clampZ)
+}
+
 function updateUI() {
   if (selectedObject) {
     ui.hint.classList.add('hidden')
@@ -256,7 +350,7 @@ function toggleSelection(meshGroup) {
     mesh: meshGroup,
     body: objData.body,
     originalMass: objData.body.mass,
-    userData: meshGroup.userData, // Ensure refOffset is accessible
+    userData: meshGroup.userData,
     targetPosition: new CANNON.Vec3().copy(objData.body.position)
   }
 
@@ -397,7 +491,12 @@ function onPointerMove(event) {
     const rawBodyPos = new CANNON.Vec3(rawPos.x, selectedObject.mesh.position.y, rawPos.z)
 
     // Robust Snap using Reference Offset
-    const snappedPos = getSnappedPosition(rawBodyPos, selectedObject.body.quaternion, selectedObject.userData.refOffset)
+    let snappedPos = getSnappedPosition(rawBodyPos, selectedObject.body.quaternion, selectedObject.userData.refOffset)
+
+    // Bounds Clamp
+    if (selectedObject.userData.minOffset && selectedObject.userData.maxOffset) {
+      snappedPos = getClampedPosition(snappedPos, selectedObject.body.quaternion, selectedObject.userData.minOffset, selectedObject.userData.maxOffset)
+    }
 
     // Update TARGET
     selectedObject.targetPosition.x = snappedPos.x
@@ -517,7 +616,12 @@ function moveBlockCameraRelative(xInput, zInput) {
   )
 
   // Robust Snap this tentative position
-  const snappedPos = getSnappedPosition(tentativePos, selectedObject.body.quaternion, selectedObject.userData.refOffset)
+  let snappedPos = getSnappedPosition(tentativePos, selectedObject.body.quaternion, selectedObject.userData.refOffset)
+
+  // Bounds Clamp
+  if (selectedObject.userData.minOffset && selectedObject.userData.maxOffset) {
+    snappedPos = getClampedPosition(snappedPos, selectedObject.body.quaternion, selectedObject.userData.minOffset, selectedObject.userData.maxOffset)
+  }
 
   // Init target if needed (should be set on selection but safety check)
   if (!selectedObject.targetPosition) selectedObject.targetPosition = new CANNON.Vec3().copy(selectedObject.body.position)
